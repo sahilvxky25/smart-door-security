@@ -5,28 +5,36 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"smart-door-backend/internal/api"
-	"smart-door-backend/internal/config"
-	"smart-door-backend/internal/database"
-	"smart-door-backend/internal/mqtt"
-	"smart-door-backend/internal/services"
 	"syscall"
 	"time"
+
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/api"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/config"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/database"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/models"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/mqtt"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/services"
 )
 
+// @title Smart Door Security API
+// @version 1.0
+// @description Backend API for the Smart Door Security system. Manages door access, face recognition, intrusion detection, and MQTT-based IoT communication.
+// @host localhost:8080
+// @BasePath /
 func main() {
 
 	// Load configuration
 	cfg := config.LoadConfig()
 
 	// Initialize database
-	db, err := database.NewPostgres(cfg)
+	db, err := database.NewPostgres(cfg.DB_URL)
 	if err != nil {
 		log.Fatal("Database connection failed:", err)
 	}
+	db.AutoMigrate(&models.User{})
 
 	// Initialize MQTT client
-	mqttClient := mqtt.NewClient(cfg)
+	mqttClient := mqtt.NewClient(cfg.MQTT_BROKER)
 
 	// Initialize services
 	authService := services.NewAuthService(db)
@@ -41,10 +49,13 @@ func main() {
 
 	// Initialize API router
 	router := api.NewRouter(
+		db,
 		authService,
 		doorService,
 		cameraService,
+		intrusionService,
 		notificationService,
+		faceService,
 	)
 
 	// Start HTTP server
