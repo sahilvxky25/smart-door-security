@@ -21,9 +21,9 @@ info:
   title: Smart Door Security API
   version: "1.0"
 paths:
-  /door/unlock:
+  /door/lock:
     post:
-      description: Sends an MQTT command to unlock the door servo
+      description: Sends an MQTT command to lock the door servo
       produces:
       - application/json
       responses:
@@ -33,9 +33,77 @@ paths:
             additionalProperties:
               type: string
             type: object
-      summary: Unlock door
+      summary: Lock door
       tags:
       - door
+  /door/unlock:
+    post:
+      description: Sends an MQTT command to unlock the door servo and logs a MANUAL_UNLOCK
+        event
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Unlock door (manual)
+      tags:
+      - door
+  /events:
+    get:
+      description: Returns the most recent events
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List events
+      tags:
+      - events
+  /events/{id}:
+    get:
+      description: Returns a single event
+      parameters:
+      - description: Event ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get event by ID
+      tags:
+      - events
   /health:
     get:
       description: Returns the health status of the API

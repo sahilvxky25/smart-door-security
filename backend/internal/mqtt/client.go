@@ -1,6 +1,8 @@
 package mqtt
 
 import (
+	"log"
+
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
@@ -14,6 +16,12 @@ func NewClient(broker string) mqtt.Client {
 
 	token := client.Connect()
 	token.Wait()
+
+	if token.Error() != nil {
+		log.Fatal(token.Error())
+	}
+
+	log.Println("MQTT connected")
 
 	return client
 }

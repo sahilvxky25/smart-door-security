@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Smart Door - Owner</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: sans-serif;
+        background: #0f0f23;
+        color: #eee;
+        padding: 1rem;
+      }
+      h1 {
+        text-align: center;
+        margin-bottom: 1rem;
+        font-size: 1.4rem;
+      }
+      #status {
+        text-align: center;
+        padding: 0.5rem;
+        margin-bottom: 1rem;
+        border-radius: 6px;
+        font-size: 0.9rem;
+      }
+      .connected {
+        background: #16213e;
+      }
+      .disconnected {
+        background: #3d0000;
+      }
+      #notification {
+        display: none;
+        background: #1a1a3e;
+        border: 1px solid #e94560;
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+      #notification img {
+        width: 100%;
+        max-width: 400px;
+        border-radius: 6px;
+        margin: 0.5rem 0;
+        display: block;
+      }
+      #notification .time {
+        font-size: 0.8rem;
+        color: #999;
+      }
+      .btn-row {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+      }
+      .btn {
+        flex: 1;
+        padding: 0.8rem;
+        border: none;
+        border-radius: 6px;
+        font-size: 1rem;
+        font-weight: bold;
+        cursor: pointer;
+      }
+      .btn-talk {
+        background: #2ecc71;
+        color: #000;
+      }
+      .btn-hangup {
+        background: #e74c3c;
+        color: #fff;
+        display: none;
+      }
+      .btn-unlock {
+        background: #3498db;
+        color: #fff;
+      }
+      #remoteVideo {
+        width: 100%;
+        max-width: 480px;
+        display: none;
+        margin: 1rem auto;
+        border-radius: 8px;
+        background: #000;
+      }
+      #call-status {
+        text-align: center;
+        font-size: 0.9rem;
+        margin: 0.5rem 0;
+        color: #aaa;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Smart Door Owner</h1>
+    <div id="status" class="disconnected">Connecting...</div>
+
+    <div id="notification">
+      <strong>Unknown Visitor Detected</strong>
+      <div class="time" id="notif-time"></div>
+      <img id="visitor-img" src="" alt="Visitor" />
+      <div class="btn-row">
+        <button class="btn btn-talk" id="btn-talk" onclick="startCall()">
+          Talk
+        </button>
+        <button class="btn btn-hangup" id="btn-hangup" onclick="endCall()">
+          Hang Up
+        </button>
+        <button class="btn btn-unlock" onclick="unlockDoor()">Unlock</button>
+      </div>
+    </div>
+
+    <div id="call-status"></div>
+    <video id="remoteVideo" autoplay playsinline></video>
+
+    <script>
+      const BACKEND = location.origin;
+      const WS_URL = `ws://${location.host}/ws/signaling?role=owner`;
+      const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+
+      let ws = null;
+      let pc = null;
+      let localStream = null;
+
+      const statusEl = document.getElementById("status");
+      const notifEl = document.getElementById("notification");
+      const visitorImg = document.getElementById("visitor-img");
+      const notifTime = document.getElementById("notif-time");
+      const remoteVideo = document.getElementById("remoteVideo");
+      const callStatus = document.getElementById("call-status");
+      const btnTalk = document.getElementById("btn-talk");
+      const btnHangup = document.getElementById("btn-hangup");
+
+      function setStatus(text, cls) {
+        statusEl.textContent = text;
+        statusEl.className = cls;
+      }
+
+      function connectWS() {
+        ws = new WebSocket(WS_URL);
+
+        ws.onopen = () => setStatus("Connected", "connected");
+
+        ws.onclose = () => {
+          setStatus("Disconnected - Reconnecting...", "disconnected");
+          setTimeout(connectWS, 3000);
+        };
+
+        ws.onerror = () => ws.close();
+
+        ws.onmessage = async (event) => {
+          const msg = JSON.parse(event.data);
+          console.log("[Owner] Received:", msg.type);
+
+          switch (msg.type) {
+            case "unknown_visitor":
+              showNotification(msg);
+              break;
+            case "offer":
+              await handleOffer(msg);
+              break;
+            case "ice-candidate":
+              await handleIceCandidate(msg);
+              break;
+            case "hangup":
+              cleanupCall();
+              callStatus.textContent = "Call ended by door";
+              break;
+          }
+        };
+      }
+
+      function showNotification(msg) {
+        visitorImg.src = msg.image_url;
+        notifTime.textContent = new Date(msg.timestamp).toLocaleString();
+        notifEl.style.display = "block";
+        btnTalk.style.display = "block";
+        btnHangup.style.display = "none";
+        if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+      }
+
+      function startCall() {
+        callStatus.textContent = "Requesting call...";
+        sendMessage({ type: "call_request" });
+        btnTalk.style.display = "none";
+        btnHangup.style.display = "block";
+      }
+
+      async function handleOffer(msg) {
+        callStatus.textContent = "Received offer, connecting...";
+
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+          });
+
+          pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+          localStream.getTracks().forEach((track) => {
+            pc.addTrack(track, localStream);
+          });
+
+          pc.ontrack = (event) => {
+            console.log("[Owner] Remote track received:", event.track.kind);
+            remoteVideo.srcObject = event.streams[0];
+            remoteVideo.style.display = "block";
+          };
+
+          pc.onicecandidate = (event) => {
+            if (event.candidate) {
+              sendMessage({
+                type: "ice-candidate",
+                candidate: event.candidate,
+              });
+            }
+          };
+
+          pc.oniceconnectionstatechange = () => {
+            console.log("[Owner] ICE state:", pc.iceConnectionState);
+            if (pc.iceConnectionState === "connected") {
+              callStatus.textContent = "Call active";
+            } else if (
+              pc.iceConnectionState === "disconnected" ||
+              pc.iceConnectionState === "failed"
+            ) {
+              cleanupCall();
+              callStatus.textContent = "Call disconnected";
+            }
+          };
+
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          sendMessage({ type: "answer", sdp: pc.localDescription });
+
+          callStatus.textContent = "Answer sent, establishing connection...";
+        } catch (err) {
+          console.error("[Owner] Error handling offer:", err);
+          callStatus.textContent = "Error: " + err.message;
+        }
+      }
+
+      async function handleIceCandidate(msg) {
+        if (!pc) return;
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+        } catch (err) {
+          console.error("[Owner] Error adding ICE candidate:", err);
+        }
+      }
+
+      function endCall() {
+        sendMessage({ type: "hangup" });
+        cleanupCall();
+        callStatus.textContent = "Call ended";
+      }
+
+      function cleanupCall() {
+        if (pc) {
+          pc.close();
+          pc = null;
+        }
+        if (localStream) {
+          localStream.getTracks().forEach((t) => t.stop());
+          localStream = null;
+        }
+        remoteVideo.style.display = "none";
+        remoteVideo.srcObject = null;
+        btnTalk.style.display = "block";
+        btnHangup.style.display = "none";
+      }
+
+      async function unlockDoor() {
+        try {
+          const resp = await fetch(`${BACKEND}/door/unlock`, {
+            method: "POST",
+          });
+          const data = await resp.json();
+          alert(data.status || "Door unlocked");
+        } catch (err) {
+          alert("Failed to unlock: " + err.message);
+        }
+      }
+
+      function sendMessage(msg) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(msg));
+        }
+      }
+
+      connectWS();
+    </script>
+  </body>
+</html>

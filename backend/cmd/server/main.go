@@ -14,6 +14,8 @@ import (
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/models"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/mqtt"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/services"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/storage"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/webrtc"
 )
 
 // @title Smart Door Security API
@@ -31,17 +33,33 @@ func main() {
 	if err != nil {
 		log.Fatal("Database connection failed:", err)
 	}
-	db.AutoMigrate(&models.User{})
+	db.AutoMigrate(&models.User{}, &models.Event{})
 
 	// Initialize MQTT client
 	mqttClient := mqtt.NewClient(cfg.MQTT_BROKER)
 
+	// Initialize MinIO storage
+	mediaStore, err := storage.NewMediaStorage(
+		cfg.MINIO_ENDPOINT,
+		cfg.MINIO_ACCESS_KEY,
+		cfg.MINIO_SECRET_KEY,
+		cfg.MINIO_BUCKET,
+	)
+	if err != nil {
+		log.Fatal("MinIO connection failed:", err)
+	}
+
+	// Initialize WebRTC signaling hub
+	signalingHub := webrtc.NewHub()
+	go signalingHub.Run()
+
 	// Initialize services
+	eventService := services.NewEventService(db)
 	authService := services.NewAuthService(db)
 	doorService := services.NewDoorService(mqttClient)
-	faceService := services.NewFaceService()
-	intrusionService := services.NewIntrusionService(db, mqttClient)
-	cameraService := services.NewCameraService(faceService, doorService)
+	faceService := services.NewFaceService(cfg.FACE_SERVICE_URL)
+	intrusionService := services.NewIntrusionService(db, mqttClient, eventService)
+	cameraService := services.NewCameraService(faceService, doorService, eventService, mediaStore, mqttClient, db, signalingHub)
 	notificationService := services.NewNotificationService()
 
 	// Start MQTT subscribers
@@ -56,6 +74,8 @@ func main() {
 		intrusionService,
 		notificationService,
 		faceService,
+		eventService,
+		signalingHub,
 	)
 
 	// Start HTTP server

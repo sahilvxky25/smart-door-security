@@ -1,0 +1,8 @@
+flask
+opencv-python
+numpy
+facenet-pytorch
+torch
+torchvision
+Pillow
+mediapipe
