@@ -4,33 +4,32 @@ import (
 	"log"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/models"
 	"gorm.io/gorm"
 )
 
 type IntrusionService struct {
 	db           *gorm.DB
-	mqttClient   mqtt.Client
 	eventService *EventService
+	soundService *SoundService
+	notify       *NotificationService
 }
 
-func NewIntrusionService(db *gorm.DB, mqttClient mqtt.Client, eventService *EventService) *IntrusionService {
+func NewIntrusionService(db *gorm.DB, eventService *EventService, soundService *SoundService, notify *NotificationService) *IntrusionService {
 	return &IntrusionService{
 		db:           db,
-		mqttClient:   mqttClient,
 		eventService: eventService,
+		soundService: soundService,
+		notify:       notify,
 	}
 }
 
 func (i *IntrusionService) HandleIntrusion() {
 	log.Println("[IntrusionService] Vibration detected → triggering alert")
 
-	// Publish alert to MQTT so the ESP/buzzer can react
-	i.mqttClient.Publish("home/door/alert", 0, false, "INTRUSION_DETECTED")
-
-	// Log event
+	i.soundService.PlaySOS()
 	i.eventService.LogEvent(models.EventForcedEntry, nil, "")
+	i.notify.Notify(models.EventForcedEntry, "")
 
-	log.Printf("[IntrusionService] Alert published and event logged at %s", time.Now().Format(time.RFC3339))
+	log.Printf("[IntrusionService] SOS alert played and event logged at %s", time.Now().Format(time.RFC3339))
 }

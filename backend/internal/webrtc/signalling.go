@@ -85,6 +85,25 @@ func (h *Hub) broadcast(message []byte, targetRole string) {
 	}
 }
 
+// BroadcastAlert sends a typed security alert to all connected owner clients.
+func (h *Hub) BroadcastAlert(eventType, title, body, imageURL string) {
+	msg := map[string]string{
+		"type":       "alert",
+		"event_type": eventType,
+		"title":      title,
+		"body":       body,
+		"image_url":  imageURL,
+		"timestamp":  time.Now().Format(time.RFC3339),
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("[SignalingHub] Failed to marshal alert: %v", err)
+		return
+	}
+	h.broadcast(data, "owner")
+	log.Printf("[SignalingHub] Sent %s alert to owner clients", eventType)
+}
+
 // NotifyOwner sends an unknown_visitor notification to all connected owner clients.
 func (h *Hub) NotifyOwner(imageURL string) {
 	msg := map[string]string{

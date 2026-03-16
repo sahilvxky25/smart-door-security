@@ -9,7 +9,6 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/models"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/storage"
-	"github.com/gottatouchsomegrass/smart-door-backend/internal/webrtc"
 	"gorm.io/gorm"
 )
 
@@ -20,7 +19,8 @@ type CameraService struct {
 	storage      *storage.MediaStorage
 	mqttClient   mqtt.Client
 	db           *gorm.DB
-	signalingHub *webrtc.Hub
+	notifySvc    *NotificationService
+	soundService *SoundService
 }
 
 func NewCameraService(
@@ -30,7 +30,8 @@ func NewCameraService(
 	store *storage.MediaStorage,
 	mqttClient mqtt.Client,
 	db *gorm.DB,
-	signalingHub *webrtc.Hub,
+	notifySvc *NotificationService,
+	soundService *SoundService,
 ) *CameraService {
 	return &CameraService{
 		faceService:  faceService,
@@ -39,7 +40,8 @@ func NewCameraService(
 		storage:      store,
 		mqttClient:   mqttClient,
 		db:           db,
-		signalingHub: signalingHub,
+		notifySvc:    notifySvc,
+		soundService: soundService,
 	}
 }
 
@@ -71,11 +73,13 @@ func (c *CameraService) HandleMotion() {
 	case result.Spoof:
 		log.Println("[Pipeline] SPOOF DETECTED → creating event + alert")
 		c.eventService.LogEvent(models.EventSpoofAttempt, nil, imageURL)
-		c.mqttClient.Publish("home/door/alert", 0, false, "SPOOF_DETECTED")
+		c.notifySvc.Notify(models.EventSpoofAttempt, imageURL)
+		c.soundService.PlaySOS()
 
 	case result.Match:
 		log.Printf("[Pipeline] Authorized user %q → unlocking door", result.User)
 		c.doorService.UnlockDoor()
+		c.soundService.PlayWelcome()
 
 		var userID *uint
 		var user models.User
@@ -90,6 +94,6 @@ func (c *CameraService) HandleMotion() {
 		log.Println("[Pipeline] Unknown visitor → storing image + notifying owner")
 		c.eventService.LogEvent(models.EventUnknownVisitor, nil, imageURL)
 		c.mqttClient.Publish("home/door/unknown_visitor", 0, false, imageURL)
-		c.signalingHub.NotifyOwner(imageURL)
+		c.notifySvc.NotifyUnknownVisitor(imageURL)
 	}
 }

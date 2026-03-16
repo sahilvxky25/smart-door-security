@@ -2,10 +2,12 @@ from flask import Flask, request, jsonify
 import cv2
 import numpy as np
 import os
+import re
 import time
 import threading
 import traceback
 import base64
+import pickle
 import torch
 from facenet_pytorch import MTCNN, InceptionResnetV1
 from PIL import Image
@@ -15,11 +17,17 @@ app = Flask(__name__)
 
 # Prevents concurrent camera access from overlapping PIR triggers
 camera_lock = threading.Lock()
+# Protects known_faces dict from concurrent enrollment/recognition
+faces_lock = threading.RLock()
 
 KNOWN_FACES_DIR = "face_service/known_faces"
+EMBEDDINGS_FILE = "face_service/embeddings.pkl"
 MATCH_THRESHOLD = 0.65  # cosine similarity for FaceNet embeddings
 CAPTURE_DURATION = 2.5  # seconds of video to capture for liveness
 CAPTURE_FPS = 12  # target frame rate during capture
+
+# Allowed name characters: letters, digits, spaces, hyphens, underscores
+_NAME_RE = re.compile(r'^[\w\s\-]{1,64}$')
 
 # ----------------------------
 # INITIALIZE MODELS
@@ -33,6 +41,14 @@ mtcnn = MTCNN(
     device=device,
 )
 
+# MTCNN with keep_all=True to detect multiple faces (used in enrollment validation)
+mtcnn_all = MTCNN(
+    image_size=160,
+    margin=20,
+    keep_all=True,
+    device=device,
+)
+
 facenet = InceptionResnetV1(pretrained="vggface2").eval().to(device)
 
 anti_spoof = AntiSpoof()
@@ -42,27 +58,62 @@ known_faces = {}
 
 
 # ----------------------------
-# LOAD KNOWN FACES
+# PERSISTENCE
 # ----------------------------
+def save_embeddings():
+    """Persist embeddings dict to disk."""
+    try:
+        with faces_lock:
+            data = {name: emb.cpu() for name, emb in known_faces.items()}
+        with open(EMBEDDINGS_FILE, "wb") as f:
+            pickle.dump(data, f)
+        print(f"[FaceService] Saved {len(data)} embeddings to {EMBEDDINGS_FILE}")
+    except Exception as e:
+        print(f"[FaceService] WARNING: failed to save embeddings: {e}")
+
+
 def load_known_faces():
+    """Load embeddings from pickle (fast) or fall back to directory scan."""
+    os.makedirs(KNOWN_FACES_DIR, exist_ok=True)
+
+    # Try loading from pickle first
+    if os.path.exists(EMBEDDINGS_FILE):
+        try:
+            with open(EMBEDDINGS_FILE, "rb") as f:
+                data = pickle.load(f)
+            with faces_lock:
+                for name, emb in data.items():
+                    known_faces[name] = emb.to(device)
+            print(f"[FaceService] Loaded {len(known_faces)} embeddings from pickle")
+            return
+        except Exception as e:
+            print(f"[FaceService] Pickle load failed ({e}), falling back to directory scan")
+
+    # Fall back to scanning known_faces directory
+    loaded = 0
     for filename in os.listdir(KNOWN_FACES_DIR):
-        path = os.path.join(KNOWN_FACES_DIR, filename)
-
-        image = Image.open(path).convert("RGB")
-        face_tensor = mtcnn(image)
-
-        if face_tensor is None:
-            print(f"[FaceService] WARNING: no face detected in {filename}, skipping")
+        if not filename.lower().endswith((".jpg", ".jpeg", ".png")):
             continue
-
-        with torch.no_grad():
-            embedding = facenet(face_tensor.unsqueeze(0).to(device))
-
-        name = os.path.splitext(filename)[0]
-        known_faces[name] = embedding[0]
-        print(f"[FaceService] Loaded: {name} (from {filename})")
+        path = os.path.join(KNOWN_FACES_DIR, filename)
+        try:
+            image = Image.open(path).convert("RGB")
+            face_tensor = mtcnn(image)
+            if face_tensor is None:
+                print(f"[FaceService] WARNING: no face detected in {filename}, skipping")
+                continue
+            with torch.no_grad():
+                embedding = facenet(face_tensor.unsqueeze(0).to(device))
+            name = os.path.splitext(filename)[0]
+            with faces_lock:
+                known_faces[name] = embedding[0]
+            loaded += 1
+            print(f"[FaceService] Loaded: {name} (from {filename})")
+        except Exception as e:
+            print(f"[FaceService] WARNING: failed to load {filename}: {e}")
 
     print(f"[FaceService] {len(known_faces)} known faces ready: {list(known_faces.keys())}")
+    if loaded > 0:
+        save_embeddings()
 
 
 # ----------------------------
@@ -92,7 +143,10 @@ def recognize_face(frame):
     best_score = -1.0
     best_name = ""
 
-    for name, known_emb in known_faces.items():
+    with faces_lock:
+        faces_snapshot = dict(known_faces)
+
+    for name, known_emb in faces_snapshot.items():
         score = cosine_similarity(embedding, known_emb)
         print(f"[FaceService]   vs {name}: similarity={score:.4f}")
         if score > best_score:
@@ -182,7 +236,9 @@ def capture_and_recognize():
     """Full pipeline: capture video -> anti-spoof -> face recognition.
     This is the primary endpoint called by the Go backend on PIR trigger."""
     try:
-        if len(known_faces) == 0:
+        with faces_lock:
+            n_faces = len(known_faces)
+        if n_faces == 0:
             return jsonify({"error": "no known faces loaded"}), 503
 
         # Step 1: Capture video sequence
@@ -227,15 +283,135 @@ def capture_and_recognize():
         return jsonify({"error": f"internal error: {str(e)}"}), 500
 
 
+@app.route("/enroll", methods=["POST"])
+def enroll():
+    """Enroll a new face.
+
+    Accepts JSON: {"name": "Alice", "image": "<base64-encoded JPEG/PNG>"}
+
+    Edge cases handled:
+    - Empty / invalid name
+    - Corrupt or non-image data
+    - No face detected in image
+    - Multiple faces detected (ambiguous)
+    - Name already enrolled (overwrite)
+    - Concurrent enrollment (serialized via faces_lock)
+    """
+    try:
+        data = request.get_json(silent=True)
+        if not data:
+            return jsonify({"error": "request body must be JSON"}), 400
+
+        name = (data.get("name") or "").strip()
+        image_b64 = data.get("image") or ""
+
+        # Validate name
+        if not name:
+            return jsonify({"error": "name is required"}), 400
+        if not _NAME_RE.match(name):
+            return jsonify({"error": "name may only contain letters, digits, spaces, hyphens and underscores (max 64 chars)"}), 400
+
+        # Decode image
+        if not image_b64:
+            return jsonify({"error": "image is required (base64-encoded)"}), 400
+        try:
+            image_bytes = base64.b64decode(image_b64)
+        except Exception:
+            return jsonify({"error": "image is not valid base64"}), 400
+
+        npimg = np.frombuffer(image_bytes, np.uint8)
+        frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+        if frame is None:
+            return jsonify({"error": "could not decode image — unsupported format or corrupt data"}), 400
+
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(rgb)
+
+        # Check for multiple faces (reject ambiguous enrollment)
+        all_faces = mtcnn_all(pil_image)
+        if all_faces is None:
+            return jsonify({"error": "no face detected in the provided image"}), 422
+        if isinstance(all_faces, list) or (hasattr(all_faces, 'shape') and all_faces.ndim == 4 and all_faces.shape[0] > 1):
+            n = all_faces.shape[0] if hasattr(all_faces, 'shape') else len(all_faces)
+            if n > 1:
+                return jsonify({"error": f"multiple faces detected ({n}) — please provide an image with exactly one face"}), 422
+
+        # Get single face tensor
+        face_tensor = mtcnn(pil_image)
+        if face_tensor is None:
+            return jsonify({"error": "face detection failed — image may be too blurry or face too small"}), 422
+
+        # Compute embedding
+        with torch.no_grad():
+            embedding = facenet(face_tensor.unsqueeze(0).to(device))[0]
+
+        overwrite = name in known_faces
+
+        # Save image to disk
+        safe_filename = name.replace(" ", "_") + ".jpg"
+        image_path = os.path.join(KNOWN_FACES_DIR, safe_filename)
+        cv2.imwrite(image_path, frame)
+
+        # Update in-memory dict and persist
+        with faces_lock:
+            known_faces[name] = embedding
+        save_embeddings()
+
+        print(f"[FaceService] Enrolled: {name!r} (overwrite={overwrite})")
+        return jsonify({
+            "enrolled": name,
+            "overwrite": overwrite,
+            "total_known": len(known_faces),
+        }), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"internal error: {str(e)}"}), 500
+
+
+@app.route("/faces", methods=["GET"])
+def list_faces():
+    """List all enrolled face names."""
+    with faces_lock:
+        names = list(known_faces.keys())
+    return jsonify({"faces": names, "count": len(names)})
+
+
+@app.route("/faces/<name>", methods=["DELETE"])
+def delete_face(name):
+    """Remove an enrolled face by name."""
+    name = name.strip()
+    with faces_lock:
+        if name not in known_faces:
+            return jsonify({"error": f"face {name!r} not found"}), 404
+        del known_faces[name]
+
+    # Remove image from disk (best-effort)
+    for ext in (".jpg", ".jpeg", ".png"):
+        path = os.path.join(KNOWN_FACES_DIR, name.replace(" ", "_") + ext)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception as e:
+                print(f"[FaceService] WARNING: could not delete image {path}: {e}")
+
+    save_embeddings()
+    print(f"[FaceService] Deleted face: {name!r}")
+    return jsonify({"deleted": name, "total_known": len(known_faces)})
+
+
 @app.route("/health", methods=["GET"])
 def health():
+    with faces_lock:
+        n = len(known_faces)
+        names = list(known_faces.keys())
     return jsonify({
         "status": "ok",
         "model": "FaceNet (InceptionResnetV1 + VGGFace2)",
         "anti_spoof": "blink + head_movement + texture (2/3 required)",
         "device": str(device),
-        "known_faces": len(known_faces),
-        "known_users": list(known_faces.keys()),
+        "known_faces": n,
+        "known_users": names,
     })
 
 

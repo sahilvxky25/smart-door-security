@@ -13,6 +13,30 @@ definitions:
     - name
     - password
     type: object
+  api.SignInRequest:
+    properties:
+      name:
+        type: string
+      password:
+        type: string
+    required:
+    - name
+    - password
+    type: object
+  api.SignUpRequest:
+    properties:
+      email:
+        type: string
+      name:
+        type: string
+      password:
+        minLength: 6
+        type: string
+    required:
+    - email
+    - name
+    - password
+    type: object
 host: localhost:8080
 info:
   contact: {}
@@ -21,6 +45,76 @@ info:
   title: Smart Door Security API
   version: "1.0"
 paths:
+  /auth/signin:
+    post:
+      consumes:
+      - application/json
+      description: Authenticates by name + password and returns a JWT
+      parameters:
+      - description: Sign-in credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.SignInRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Sign in
+      tags:
+      - auth
+  /auth/signup:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new user account and returns a JWT
+      parameters:
+      - description: Sign-up credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.SignUpRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Register a new user
+      tags:
+      - auth
   /door/lock:
     post:
       description: Sends an MQTT command to lock the door servo
@@ -104,6 +198,137 @@ paths:
       summary: Get event by ID
       tags:
       - events
+  /family:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List family members
+      tags:
+      - family
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: name
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Create a family member (name only; enroll face separately)
+      tags:
+      - family
+  /family/{id}:
+    delete:
+      parameters:
+      - description: Member ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete a family member and remove their face enrollment
+      tags:
+      - family
+    get:
+      parameters:
+      - description: Member ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a family member by ID
+      tags:
+      - family
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Member ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses: {}
+      summary: Rename a family member
+      tags:
+      - family
+  /family/{id}/enroll:
+    delete:
+      parameters:
+      - description: Member ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Remove the face enrollment for a member
+      tags:
+      - family
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: Member ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Face photo
+        in: formData
+        name: photo
+        required: true
+        type: file
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Upload a photo and enroll the member's face in the recognition model
+      tags:
+      - family
   /health:
     get:
       description: Returns the health status of the API

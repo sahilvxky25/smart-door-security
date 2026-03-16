@@ -2,9 +2,13 @@ package api
 
 import (
 	"fmt"
+	"net/http"
 
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/controllers"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/models"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/repository"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/services"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/storage"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/webrtc"
 
 	"github.com/gin-gonic/gin"
@@ -25,6 +29,7 @@ func NewRouter(
 	face *services.FaceService,
 	eventService *services.EventService,
 	signalingHub *webrtc.Hub,
+	mediaStore *storage.MediaStorage,
 ) *gin.Engine {
 
 	r := gin.Default()
@@ -33,6 +38,11 @@ func NewRouter(
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	r.GET("/health", healthCheck)
+
+	// Authentication
+	r.POST("/auth/signup", signUpHandler(auth))
+	r.POST("/auth/signin", signInHandler(auth))
+
 	r.POST("/door/unlock", unlockDoorManual(door, eventService))
 	r.POST("/door/lock", lockDoor(door))
 
@@ -41,6 +51,20 @@ func NewRouter(
 
 	r.GET("/events", listEventsHandler(eventService))
 	r.GET("/events/:id", getEventHandler(eventService))
+
+	// Family member management + face enrollment
+	familyRepo := repository.NewFamilyRepo(db)
+	fc := controllers.NewFamilyController(familyRepo, face, mediaStore)
+	r.GET("/family", fc.ListMembers)
+	r.POST("/family", fc.CreateMember)
+	r.GET("/family/:id", fc.GetMember)
+	r.PUT("/family/:id", fc.UpdateMember)
+	r.DELETE("/family/:id", fc.DeleteMember)
+	r.POST("/family/:id/enroll", fc.EnrollFace)
+	r.DELETE("/family/:id/enroll", fc.UnenrollFace)
+
+	// Image proxy — fetches objects from MinIO and streams them to clients
+	r.GET("/images/*path", imageProxyHandler(mediaStore))
 
 	// WebRTC signaling WebSocket
 	r.GET("/ws/signaling", signalingHub.HandleWebSocket)
@@ -207,5 +231,95 @@ func getEventHandler(events *services.EventService) gin.HandlerFunc {
 			return
 		}
 		c.JSON(200, gin.H{"event": event})
+	}
+}
+
+// SignUpRequest is the request body for POST /auth/signup
+type SignUpRequest struct {
+	Name     string `json:"name"  binding:"required"`
+	Email    string `json:"email" binding:"required,email"`
+	Password string `json:"password" binding:"required,min=6"`
+}
+
+// signUpHandler godoc
+// @Summary Register a new user
+// @Description Creates a new user account and returns a JWT
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param body body SignUpRequest true "Sign-up credentials"
+// @Success 201 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Router /auth/signup [post]
+func signUpHandler(auth *services.AuthService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req SignUpRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		token, user, err := auth.SignUp(req.Name, req.Email, req.Password)
+		if err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusCreated, gin.H{"token": token, "user": user})
+	}
+}
+
+// SignInRequest is the request body for POST /auth/signin
+type SignInRequest struct {
+	Name     string `json:"name"     binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+// signInHandler godoc
+// @Summary Sign in
+// @Description Authenticates by name + password and returns a JWT
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param body body SignInRequest true "Sign-in credentials"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Router /auth/signin [post]
+func signInHandler(auth *services.AuthService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req SignInRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		token, user, err := auth.SignIn(req.Name, req.Password)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"token": token, "user": user})
+	}
+}
+
+func imageProxyHandler(media *storage.MediaStorage) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// path param includes leading slash, e.g. "/snapshot_123.jpg"
+		objectName := c.Param("path")
+		if len(objectName) > 0 && objectName[0] == '/' {
+			objectName = objectName[1:]
+		}
+		if objectName == "" {
+			c.Status(http.StatusBadRequest)
+			return
+		}
+
+		obj, contentType, err := media.GetObject(c.Request.Context(), objectName)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
+			return
+		}
+		defer obj.Close()
+
+		c.DataFromReader(http.StatusOK, -1, contentType, obj, nil)
 	}
 }

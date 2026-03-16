@@ -1,122 +1,158 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:provider/provider.dart';
+import 'config/app_config.dart';
+import 'models/event.dart';
+import 'providers/auth_provider.dart';
+import 'providers/call_provider.dart';
+import 'providers/door_provider.dart';
+import 'providers/event_provider.dart';
+import 'providers/family_provider.dart';
+import 'providers/signaling_provider.dart';
+import 'screens/call_screen.dart';
+import 'screens/event_detail_screen.dart';
+import 'screens/events_screen.dart';
+import 'screens/family_screen.dart';
+import 'screens/home_screen.dart';
+import 'screens/login_screen.dart';
+import 'screens/profile_screen.dart';
+import 'screens/settings_screen.dart';
+import 'services/api_service.dart';
+import 'services/signaling_service.dart';
+import 'services/webrtc_service.dart';
 
-void main() {
-  runApp(const MyApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Load config from SharedPreferences
+  final config = await AppConfig.load();
+
+  // Initialize local notifications
+  const AndroidInitializationSettings androidInit =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+  const InitializationSettings initSettings = InitializationSettings(
+    android: androidInit,
+  );
+  final notifications = FlutterLocalNotificationsPlugin();
+  await notifications.initialize(
+    initSettings,
+    // Navigate to call screen when user taps an incoming-visitor notification.
+    onDidReceiveNotificationResponse: (details) {
+      MyApp.navigatorKey.currentState?.pushNamed('/call');
+    },
+  );
+
+  runApp(MyApp(config: config, notifications: notifications));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final AppConfig config;
+  final FlutterLocalNotificationsPlugin notifications;
 
-  // This widget is the root of your application.
+  const MyApp({super.key, required this.config, required this.notifications});
+
+  static final GlobalKey<NavigatorState> navigatorKey =
+      GlobalKey<NavigatorState>();
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.greenAccent),
-      ),
-      home: const MyHomePage(title: 'Flutter Home Page'),
+    final apiService = ApiService(baseUrl: config.baseUrl);
+    final signalingService = SignalingService();
+    final webrtcService = WebRTCService(
+      signaling: signalingService,
+      config: config,
     );
-  }
-}
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
-}
-
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
-    return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
+    return MultiProvider(
+      providers: [
+        Provider<AppConfig>(create: (_) => config),
+        Provider<ApiService>(create: (_) => apiService),
+        Provider<SignalingService>(create: (_) => signalingService),
+        Provider<WebRTCService>(create: (_) => webrtcService),
+        ChangeNotifierProvider<AuthProvider>(create: (_) => AuthProvider()),
+        ChangeNotifierProvider<EventProvider>(
+          create: (_) => EventProvider(api: apiService),
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+        ChangeNotifierProvider<DoorProvider>(
+          create: (_) => DoorProvider(api: apiService),
+        ),
+        ChangeNotifierProvider<SignalingProvider>(
+          create: (_) => SignalingProvider(
+            service: signalingService,
+            notifications: notifications,
+            navigatorKey: MyApp.navigatorKey,
+          ),
+        ),
+        ChangeNotifierProvider<CallProvider>(
+          create: (context) =>
+              CallProvider(webrtc: webrtcService, signaling: signalingService),
+        ),
+        ChangeNotifierProvider<FamilyProvider>(
+          create: (_) => FamilyProvider(api: apiService),
+        ),
+      ],
+      child: Builder(
+        builder: (context) {
+          // Restore auth session, then connect WebSocket if authenticated
+          Future.microtask(() async {
+            final auth = context.read<AuthProvider>();
+            final signaling = context.read<SignalingProvider>();
+            await auth.loadFromStorage(apiService);
+            if (auth.isAuthenticated) {
+              signaling.connect(config.wsUrl);
+            }
+          });
+
+          return MaterialApp(
+            title: 'Smart Door',
+            theme: ThemeData(
+              useMaterial3: true,
+              colorSchemeSeed: Colors.indigo,
+            ),
+            navigatorKey: navigatorKey,
+            // Auth gate: shows splash → login → home based on auth state
+            home: Consumer<AuthProvider>(
+              builder: (_, auth, __) {
+                if (auth.isLoading) {
+                  return const Scaffold(
+                    body: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                return auth.isAuthenticated
+                    ? const HomeScreen()
+                    : const LoginScreen();
+              },
+            ),
+            onGenerateRoute: _generateRoute,
+          );
+        },
       ),
     );
+  }
+
+  Route<dynamic> _generateRoute(RouteSettings settings) {
+    switch (settings.name) {
+      case '/login':
+        return MaterialPageRoute(builder: (_) => const LoginScreen());
+      case '/events':
+        return MaterialPageRoute(builder: (_) => const EventsScreen());
+      case '/event':
+        final event = settings.arguments as Event;
+        return MaterialPageRoute(
+          builder: (_) => EventDetailScreen(event: event),
+        );
+      case '/call':
+        return MaterialPageRoute(builder: (_) => const CallScreen());
+      case '/settings':
+        return MaterialPageRoute(
+          builder: (_) => SettingsScreen(config: config),
+        );
+      case '/family':
+        return MaterialPageRoute(builder: (_) => const FamilyScreen());
+      case '/profile':
+        return MaterialPageRoute(builder: (_) => const ProfileScreen());
+      default:
+        return MaterialPageRoute(builder: (_) => const HomeScreen());
+    }
   }
 }

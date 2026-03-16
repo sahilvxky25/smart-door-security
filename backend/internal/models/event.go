@@ -3,11 +3,16 @@ package models
 import "time"
 
 const (
-	EventAuthorizedEntry = "AUTHORIZED_ENTRY"
-	EventUnknownVisitor  = "UNKNOWN_VISITOR"
-	EventForcedEntry     = "FORCED_ENTRY"
-	EventManualUnlock    = "MANUAL_UNLOCK"
-	EventSpoofAttempt    = "SPOOF_ATTEMPT"
+	EventAuthorizedEntry    = "AUTHORIZED_ENTRY"
+	EventUnknownVisitor     = "UNKNOWN_VISITOR"
+	EventForcedEntry        = "FORCED_ENTRY"
+	EventManualUnlock       = "MANUAL_UNLOCK"
+	EventSpoofAttempt       = "SPOOF_ATTEMPT"
+	EventDoorOpened         = "DOOR_OPENED"
+	EventDoorClosed         = "DOOR_CLOSED"
+	EventDoorLeftOpen       = "DOOR_LEFT_OPEN"
+	EventVisitorApproaching = "VISITOR_APPROACHING"
+	EventHandleTamper       = "HANDLE_TAMPER"
 )
 
 type Event struct {

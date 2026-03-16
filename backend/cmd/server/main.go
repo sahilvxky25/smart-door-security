@@ -16,6 +16,7 @@ import (
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/services"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/storage"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/webrtc"
+	// "github.com/gottatouchsomegrass/smart-door-backend/internal/controllers"
 )
 
 // @title Smart Door Security API
@@ -33,7 +34,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Database connection failed:", err)
 	}
-	db.AutoMigrate(&models.User{}, &models.Event{})
+	db.AutoMigrate(&models.User{}, &models.Event{}, &models.FamilyMember{})
 
 	// Initialize MQTT client
 	mqttClient := mqtt.NewClient(cfg.MQTT_BROKER)
@@ -44,6 +45,7 @@ func main() {
 		cfg.MINIO_ACCESS_KEY,
 		cfg.MINIO_SECRET_KEY,
 		cfg.MINIO_BUCKET,
+		cfg.BACKEND_URL,
 	)
 	if err != nil {
 		log.Fatal("MinIO connection failed:", err)
@@ -53,17 +55,22 @@ func main() {
 	signalingHub := webrtc.NewHub()
 	go signalingHub.Run()
 
-	// Initialize services
-	eventService := services.NewEventService(db)
-	authService := services.NewAuthService(db)
-	doorService := services.NewDoorService(mqttClient)
-	faceService := services.NewFaceService(cfg.FACE_SERVICE_URL)
-	intrusionService := services.NewIntrusionService(db, mqttClient, eventService)
-	cameraService := services.NewCameraService(faceService, doorService, eventService, mediaStore, mqttClient, db, signalingHub)
-	notificationService := services.NewNotificationService()
+	// Initialize services (notificationService first — all sensor services depend on it)
+	eventService        := services.NewEventService(db)
+	authService         := services.NewAuthService(db, cfg.JWT_SECRET)
+	doorService         := services.NewDoorService(mqttClient)
+	faceService         := services.NewFaceService(cfg.FACE_SERVICE_URL)
+	soundService        := services.NewSoundService()
+	notificationService := services.NewNotificationService(signalingHub)
+	intrusionService    := services.NewIntrusionService(db, eventService, soundService, notificationService)
+	cameraService       := services.NewCameraService(faceService, doorService, eventService, mediaStore, mqttClient, db, notificationService, soundService)
+	proximityService    := services.NewProximityService(db, mqttClient, eventService, notificationService)
+	ultrasonicService   := services.NewUltrasonicService(db, mqttClient, eventService, cameraService, notificationService)
+	hallService         := services.NewHallService(db, eventService, soundService, notificationService)
+	doorStateService    := services.NewDoorStateService(db, eventService, soundService, notificationService)
 
 	// Start MQTT subscribers
-	mqtt.StartSubscribers(mqttClient, cameraService, intrusionService)
+	mqtt.StartSubscribers(mqttClient, cameraService, intrusionService, proximityService, ultrasonicService, hallService, doorStateService)
 
 	// Initialize API router
 	router := api.NewRouter(
@@ -76,6 +83,7 @@ func main() {
 		faceService,
 		eventService,
 		signalingHub,
+		mediaStore,
 	)
 
 	// Start HTTP server
