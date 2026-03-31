@@ -1,4 +1,4 @@
-version: "3.8"
+# version: "3.8"
 
 services:
   postgres:
@@ -14,27 +14,8 @@ services:
     image: eclipse-mosquitto
     ports:
       - "1883:1883"
-
-  minio:
-    image: minio/minio
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
   backend:
-    build: .
-    ports:
-      - "8080:8080"
-    environment:
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-      MINIO_BUCKET: door-images
-    depends_on:
-      - postgres
-      - mosquitto
-      - minio
+    image: busybox
+    command: ["sleep", "infinity"]

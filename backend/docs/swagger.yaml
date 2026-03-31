@@ -13,6 +13,15 @@ definitions:
     - name
     - password
     type: object
+  api.DoorStateResponse:
+    properties:
+      expected_angle:
+        example: 0
+        type: integer
+      state:
+        example: LOCKED
+        type: string
+    type: object
   api.SignInRequest:
     properties:
       name:
@@ -80,6 +89,23 @@ paths:
       summary: Sign in
       tags:
       - auth
+  /auth/signout:
+    post:
+      description: Invalidates the client session. Because JWTs are stateless, the
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Sign out
+      tags:
+      - auth
   /auth/signup:
     post:
       consumes:
@@ -117,7 +143,7 @@ paths:
       - auth
   /door/lock:
     post:
-      description: Sends an MQTT command to lock the door servo
+      description: Sends an MQTT LOCK command to the servo. Logs a MANUAL_LOCK event.
       produces:
       - application/json
       responses:
@@ -127,13 +153,43 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
       summary: Lock door
+      tags:
+      - door
+  /door/state:
+    get:
+      description: Returns the servo angle and lock state last commanded by the backend
+        (LOCKED / UNLOCKED).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.DoorStateResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get current door lock state
       tags:
       - door
   /door/unlock:
     post:
-      description: Sends an MQTT command to unlock the door servo and logs a MANUAL_UNLOCK
-        event
+      description: Sends an MQTT UNLOCK command to the servo and auto-locks after
+        5 s. Logs a MANUAL_UNLOCK event.
       produces:
       - application/json
       responses:
@@ -143,6 +199,14 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
       summary: Unlock door (manual)
       tags:
       - door
@@ -398,4 +462,10 @@ paths:
       summary: Create a new user
       tags:
       - users
+securityDefinitions:
+  BearerAuth:
+    description: 'Enter: Bearer {your-jwt-token}'
+    in: header
+    name: Authorization
+    type: apiKey
 swagger: "2.0"

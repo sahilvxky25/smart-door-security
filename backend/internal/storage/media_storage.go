@@ -4,92 +4,73 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log"
-	"strings"
-	"time"
 
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/cloudinary/cloudinary-go/v2"
+	"github.com/cloudinary/cloudinary-go/v2/api/uploader"
 )
 
 type MediaStorage struct {
-	client        *minio.Client
-	bucket        string
-	endpoint      string
-	publicBaseURL string
+	cld    *cloudinary.Cloudinary
+	folder string // root folder in Cloudinary (e.g. "door-images")
 }
 
-func NewMediaStorage(endpoint, accessKey, secretKey, bucket, publicBaseURL string) (*MediaStorage, error) {
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
-		Secure: false,
-	})
+func NewMediaStorage(cloudName, apiKey, apiSecret string) (*MediaStorage, error) {
+	cld, err := cloudinary.NewFromParams(cloudName, apiKey, apiSecret)
 	if err != nil {
-		return nil, fmt.Errorf("minio client init failed: %w", err)
+		return nil, fmt.Errorf("cloudinary init failed: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	exists, err := client.BucketExists(ctx, bucket)
-	if err != nil {
-		return nil, fmt.Errorf("minio bucket check failed: %w", err)
-	}
-	if !exists {
-		if err := client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil {
-			return nil, fmt.Errorf("minio make bucket failed: %w", err)
-		}
-		log.Printf("[MediaStorage] Created bucket %q", bucket)
-	}
-
-	// Set bucket policy to public read so objects can be fetched without auth
-	policy := fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/*"]}]}`, bucket)
-	if err := client.SetBucketPolicy(ctx, bucket, policy); err != nil {
-		log.Printf("[MediaStorage] Warning: could not set public-read policy: %v", err)
-	}
-
-	log.Printf("[MediaStorage] Connected to MinIO at %s, bucket=%s", endpoint, bucket)
-	return &MediaStorage{client: client, bucket: bucket, endpoint: endpoint, publicBaseURL: strings.TrimRight(publicBaseURL, "/")}, nil
+	log.Printf("[MediaStorage] Connected to Cloudinary (cloud=%s)", cloudName)
+	return &MediaStorage{cld: cld, folder: "door-images"}, nil
 }
 
-// UploadImage stores image bytes in MinIO and returns a backend proxy URL.
+// UploadImage uploads image bytes to Cloudinary and returns the public secure URL.
 func (m *MediaStorage) UploadImage(ctx context.Context, objectName string, data []byte, contentType string) (string, error) {
-	reader := bytes.NewReader(data)
-	_, err := m.client.PutObject(ctx, m.bucket, objectName, reader, int64(len(data)), minio.PutObjectOptions{
-		ContentType: contentType,
+	publicID := m.folder + "/" + objectName
+
+	result, err := m.cld.Upload.Upload(ctx, bytes.NewReader(data), uploader.UploadParams{
+		PublicID:       publicID,
+		ResourceType:  "image",
+		Overwrite:     boolPtr(true),
+		UniqueFilename: boolPtr(false),
 	})
 	if err != nil {
-		return "", fmt.Errorf("minio upload failed: %w", err)
+		return "", fmt.Errorf("cloudinary upload failed: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/images/%s", m.publicBaseURL, objectName)
-	return url, nil
+	log.Printf("[MediaStorage] Uploaded %s → %s", objectName, result.SecureURL)
+	return result.SecureURL, nil
 }
 
-// DeleteObject removes an object from MinIO. Best-effort — logs but does not return error.
+// DeleteObject removes an object from Cloudinary by its object name (same key used during upload).
 func (m *MediaStorage) DeleteObject(ctx context.Context, objectName string) error {
-	err := m.client.RemoveObject(ctx, m.bucket, objectName, minio.RemoveObjectOptions{})
+	publicID := m.folder + "/" + objectName
+
+	_, err := m.cld.Upload.Destroy(ctx, uploader.DestroyParams{
+		PublicID:     publicID,
+		ResourceType: "image",
+	})
 	if err != nil {
-		return fmt.Errorf("minio delete object failed: %w", err)
+		return fmt.Errorf("cloudinary delete failed: %w", err)
 	}
+
+	log.Printf("[MediaStorage] Deleted %s", publicID)
 	return nil
 }
-func (m *MediaStorage) GetObject(ctx context.Context, objectName string) (io.ReadCloser, string, error) {
-	obj, err := m.client.GetObject(ctx, m.bucket, objectName, minio.GetObjectOptions{})
+
+// DeleteByPublicID removes an object from Cloudinary using the full public_id extracted from a URL.
+func (m *MediaStorage) DeleteByPublicID(ctx context.Context, publicID string) error {
+	_, err := m.cld.Upload.Destroy(ctx, uploader.DestroyParams{
+		PublicID:     publicID,
+		ResourceType: "image",
+	})
 	if err != nil {
-		return nil, "", fmt.Errorf("minio get object failed: %w", err)
+		return fmt.Errorf("cloudinary delete failed: %w", err)
 	}
 
-	info, err := obj.Stat()
-	if err != nil {
-		obj.Close()
-		return nil, "", fmt.Errorf("minio stat object failed: %w", err)
-	}
-
-	contentType := info.ContentType
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	return obj, contentType, nil
+	log.Printf("[MediaStorage] Deleted by public_id: %s", publicID)
+	return nil
 }
+
+func boolPtr(b bool) *bool { return &b }

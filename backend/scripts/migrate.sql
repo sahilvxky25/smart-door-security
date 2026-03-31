@@ -8,7 +8,7 @@ CREATE TABLE users (
 
 CREATE TABLE family_members (
     id SERIAL PRIMARY KEY,
-    user_id INT REFERENCES users(id),
+    user_id INT NOT NULL REFERENCES users(id),
     name TEXT,
     face_embedding TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

@@ -16,8 +16,8 @@ class WebRTCService {
   WebRTCService({
     required SignalingService signaling,
     required AppConfig config,
-  })  : _signaling = signaling,
-        _config = config;
+  }) : _signaling = signaling,
+       _config = config;
 
   Future<void> handleOffer(Map<String, dynamic> sdp) async {
     await _createPeerConnection();
@@ -25,7 +25,10 @@ class WebRTCService {
     // Get owner's microphone (no video — owner only sends audio).
     // Gracefully continue without audio if the device denies/lacks a mic.
     try {
-      _localStream = await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
+      _localStream = await navigator.mediaDevices.getUserMedia({
+        'audio': true,
+        'video': false,
+      });
       for (final track in _localStream!.getTracks()) {
         await _pc!.addTrack(track, _localStream!);
       }

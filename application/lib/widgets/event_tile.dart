@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../config/app_theme.dart';
 import '../models/event.dart';
 
 class EventTile extends StatelessWidget {
@@ -11,21 +12,35 @@ class EventTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: _colorForType(event.eventType),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: _colorForType(event.eventType).withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(12),
+        ),
         child: Icon(
           _iconForType(event.eventType),
-          color: Colors.white,
+          color: _colorForType(event.eventType),
           size: 20,
         ),
       ),
-      title: Text(event.displayType),
+      title: Text(
+        event.displayType,
+        style: const TextStyle(
+          color: AppColors.textPrimary,
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
       subtitle: Text(
         '${DateFormat.yMd().add_jm().format(event.timestamp.toLocal())}'
-        '${event.user != null ? ' - ${event.user!.name}' : ''}',
+        '${event.user != null ? ' · ${event.user!.name}' : ''}',
+        style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
       ),
       trailing: event.imageUrl.isNotEmpty
-          ? const Icon(Icons.image, size: 20, color: Colors.grey)
+          ? Icon(Icons.image_outlined, size: 18, color: AppColors.textMuted)
           : null,
       onTap: onTap,
     );
@@ -34,34 +49,34 @@ class EventTile extends StatelessWidget {
   IconData _iconForType(String type) {
     switch (type) {
       case Event.typeAuthorizedEntry:
-        return Icons.check_circle;
+        return Icons.check_circle_outline;
       case Event.typeUnknownVisitor:
-        return Icons.person_off;
+        return Icons.person_off_outlined;
       case Event.typeForcedEntry:
-        return Icons.warning;
+        return Icons.warning_amber_rounded;
       case Event.typeManualUnlock:
-        return Icons.key;
+        return Icons.key_rounded;
       case Event.typeSpoofAttempt:
-        return Icons.masks;
+        return Icons.masks_outlined;
       default:
-        return Icons.info;
+        return Icons.info_outline;
     }
   }
 
   Color _colorForType(String type) {
     switch (type) {
       case Event.typeAuthorizedEntry:
-        return Colors.green;
+        return AppColors.success;
       case Event.typeUnknownVisitor:
-        return Colors.orange;
+        return AppColors.warning;
       case Event.typeForcedEntry:
-        return Colors.red;
+        return AppColors.error;
       case Event.typeManualUnlock:
-        return Colors.blue;
+        return AppColors.purple;
       case Event.typeSpoofAttempt:
-        return Colors.purple;
+        return const Color(0xFFE040FB);
       default:
-        return Colors.grey;
+        return AppColors.textMuted;
     }
   }
 }

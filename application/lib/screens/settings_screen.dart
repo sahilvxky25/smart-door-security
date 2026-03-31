@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../config/app_theme.dart';
 import '../config/app_config.dart';
+import '../providers/auth_provider.dart';
+import '../providers/signaling_provider.dart';
 import '../services/api_service.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -31,74 +35,110 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(title: const Text('Settings')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Backend URL',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _urlController,
-              decoration: InputDecoration(
-                hintText: 'http://192.168.1.x:8080',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
+      body: GradientBackground(
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: FilledButton(
-                    onPressed: _testing ? null : _testConnection,
-                    child: _testing
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('Test Connection'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: _saveSettings,
-                    child: const Text('Save'),
+                GlassCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: AppColors.purpleSurface,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.dns_outlined,
+                                color: AppColors.purple, size: 20),
+                          ),
+                          const SizedBox(width: 12),
+                          const Text(
+                            'Backend URL',
+                            style: TextStyle(
+                              color: AppColors.textPrimary,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _urlController,
+                        style: const TextStyle(color: AppColors.textPrimary),
+                        decoration: const InputDecoration(
+                          hintText: 'http://192.168.1.x:8080',
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: FilledButton(
+                              onPressed: _testing ? null : _testConnection,
+                              child: _testing
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.black),
+                                    )
+                                  : const Text('Test'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: FilledButton(
+                              onPressed: _saveSettings,
+                              child: const Text('Save'),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (_testResult != null) ...[
+                        const SizedBox(height: 16),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: _testResult!.contains('✓')
+                                ? AppColors.success.withValues(alpha: 0.1)
+                                : AppColors.error.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: _testResult!.contains('✓')
+                                  ? AppColors.success.withValues(alpha: 0.3)
+                                  : AppColors.error.withValues(alpha: 0.3),
+                            ),
+                          ),
+                          child: Text(
+                            _testResult!,
+                            style: TextStyle(
+                              color: _testResult!.contains('✓')
+                                  ? AppColors.success
+                                  : AppColors.error,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ],
             ),
-            if (_testResult != null) ...[
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: _testResult!.contains('✓')
-                      ? Colors.green[50]
-                      : Colors.red[50],
-                  border: Border.all(
-                    color: _testResult!.contains('✓')
-                        ? Colors.green
-                        : Colors.red,
-                  ),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  _testResult!,
-                  style: TextStyle(
-                    color: _testResult!.contains('✓')
-                        ? Colors.green[900]
-                        : Colors.red[900],
-                  ),
-                ),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );
@@ -109,7 +149,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _testing = true;
       _testResult = null;
     });
-
     try {
       final api = ApiService(baseUrl: _urlController.text.trim());
       final ok = await api.getHealth();
@@ -117,19 +156,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _testResult = ok ? '✓ Connection successful' : '✗ Connection failed';
       });
     } catch (e) {
-      setState(() {
-        _testResult = '✗ Error: $e';
-      });
+      setState(() => _testResult = '✗ Error: $e');
     } finally {
-      setState(() {
-        _testing = false;
-      });
+      setState(() => _testing = false);
     }
   }
 
   Future<void> _saveSettings() async {
     widget.config.baseUrl = _urlController.text.trim();
     await widget.config.save();
+
+    if (!mounted) return;
+
+    // Dynamically update the running API Service
+    context.read<ApiService>().baseUrl = widget.config.baseUrl;
+
+    // Reactively refresh the connection if user is logged in
+    if (context.read<AuthProvider>().isAuthenticated) {
+      final signaling = context.read<SignalingProvider>();
+      signaling.disconnect();
+      signaling.connect(widget.config.wsUrl, userId: context.read<AuthProvider>().user?.id);
+    }
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

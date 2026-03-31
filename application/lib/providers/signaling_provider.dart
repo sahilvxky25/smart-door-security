@@ -1,18 +1,23 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:awesome_notifications/awesome_notifications.dart';
 import '../models/signaling_message.dart';
+import '../providers/call_provider.dart';
+import '../providers/event_provider.dart';
+import '../providers/door_provider.dart';
 import '../services/signaling_service.dart';
 
 // Notification IDs – one slot per alert category.
-const _kNotifIdUnknownVisitor = 1;
+const _kNotifIdIncomingCall = 1;
 const _kNotifIdSpoof = 2;
 
 class SignalingProvider extends ChangeNotifier {
   final SignalingService _service;
-  final FlutterLocalNotificationsPlugin _notifications;
   final GlobalKey<NavigatorState> _navigatorKey;
+  final CallProvider _callProvider;
+  final EventProvider _eventProvider;
+  final DoorProvider _doorProvider;
 
   bool connected = false;
   SignalingMessage? latestNotification;
@@ -22,71 +27,119 @@ class SignalingProvider extends ChangeNotifier {
 
   SignalingProvider({
     required SignalingService service,
-    required FlutterLocalNotificationsPlugin notifications,
     required GlobalKey<NavigatorState> navigatorKey,
+    required CallProvider callProvider,
+    required EventProvider eventProvider,
+    required DoorProvider doorProvider,
   }) : _service = service,
-       _notifications = notifications,
-       _navigatorKey = navigatorKey {
+       _navigatorKey = navigatorKey,
+       _callProvider = callProvider,
+       _eventProvider = eventProvider,
+       _doorProvider = doorProvider {
     _connSub = _service.connectionState.listen((state) {
       connected = state;
       notifyListeners();
     });
     _msgSub = _service.messages.listen(_handleMessage);
+
+    // Listen for notification actions (Accept/Decline buttons)
+    AwesomeNotifications().setListeners(
+      onActionReceivedMethod: _onActionReceivedMethod,
+    );
   }
 
-  void _handleMessage(SignalingMessage msg) {
-    final isCallTrigger =
-        msg.type == 'unknown_visitor' ||
-        (msg.type == 'alert' &&
-            (msg.eventType == 'UNKNOWN_VISITOR' ||
-                msg.eventType == 'SPOOF_ATTEMPT'));
-
-    if (isCallTrigger) {
-      latestNotification = msg;
-      notifyListeners();
-      _showIncomingVisitorNotification(msg);
-      // Navigate to call screen so user can start a video call immediately.
-      _navigatorKey.currentState?.pushNamed('/call');
+  static Future<void> _onActionReceivedMethod(ReceivedAction receivedAction) async {
+    if (receivedAction.buttonKeyPressed == 'ACCEPT') {
+      // If user accepts, they are already navigating to /incoming_call by the tap action
+    } else if (receivedAction.buttonKeyPressed == 'DECLINE') {
+      await AwesomeNotifications().dismiss(receivedAction.id!);
     }
   }
 
-  Future<void> _showIncomingVisitorNotification(SignalingMessage msg) async {
-    final isSpoof = msg.type == 'alert' && msg.eventType == 'SPOOF_ATTEMPT';
+  void _handleMessage(SignalingMessage msg) {
+    // Incoming call from backend (unknown visitor OR spoof detected)
+    if (msg.type == 'incoming_call') {
+      latestNotification = msg;
+      notifyListeners();
 
-    final title =
-        msg.title ?? (isSpoof ? 'Spoof Attempt Detected' : 'Unknown Visitor');
-    final body =
-        msg.body ??
-        (isSpoof
-            ? 'A spoof was detected at your door.'
-            : 'Someone is at your door. Tap to start a video call.');
+      // Trigger the "Ringing" state
+      _callProvider.onIncomingCall(msg.imageUrl);
 
-    final vibration = Int64List.fromList([0, 500, 200, 500, 200, 500]);
+      // Show high-priority "Awesome Notification"
+      _showIncomingCallNotification(msg);
 
-    final details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        'incoming_visitor',
-        'Incoming Visitor',
-        channelDescription: 'Video call alerts when someone is at the door',
-        importance: Importance.max,
-        priority: Priority.high,
-        playSound: true,
-        enableVibration: true,
-        vibrationPattern: vibration,
+      // In-app navigation to call UI
+      _navigatorKey.currentState?.pushNamed(
+        '/incoming_call',
+        arguments: msg.imageUrl,
+      );
+
+      latestNotification = null;
+      return;
+    }
+
+    // Real-time event update — refresh dashboard and light up badge
+    if (msg.type == 'event_update') {
+      _eventProvider.fetchEventsFromWs();
+      _doorProvider.fetchState();
+      return;
+    }
+
+    // Security alert — show notification AND refresh event list
+    if (msg.type == 'alert') {
+      _showAlertNotification(msg);
+      _eventProvider.fetchEventsFromWs();
+      _doorProvider.fetchState();
+    }
+  }
+
+  Future<void> _showIncomingCallNotification(SignalingMessage msg) async {
+    await AwesomeNotifications().createNotification(
+      content: NotificationContent(
+        id: _kNotifIdIncomingCall,
+        channelKey: 'call_channel',
+        title: 'Incoming Video Call',
+        body: 'Someone is at your door. Tap to answer.',
+        bigPicture: msg.imageUrl,
+        notificationLayout: NotificationLayout.BigPicture,
         fullScreenIntent: true,
-        category: AndroidNotificationCategory.call,
+        wakeUpScreen: true,
+        category: NotificationCategory.Call,
+        autoDismissible: false,
       ),
-    );
-
-    await _notifications.show(
-      isSpoof ? _kNotifIdSpoof : _kNotifIdUnknownVisitor,
-      title,
-      body,
-      details,
+      actionButtons: [
+        NotificationActionButton(
+          key: 'ACCEPT',
+          label: 'Accept',
+          color: Colors.green,
+          actionType: ActionType.Default,
+        ),
+        NotificationActionButton(
+          key: 'DECLINE',
+          label: 'Decline',
+          color: Colors.red,
+          actionType: ActionType.DismissAction,
+        ),
+      ],
     );
   }
 
-  void connect(String wsUrl) => _service.connect(wsUrl);
+  Future<void> _showAlertNotification(SignalingMessage msg) async {
+    await AwesomeNotifications().createNotification(
+      content: NotificationContent(
+        id: msg.eventType.hashCode % 1000 + 100,
+        channelKey: 'alerts_channel',
+        title: msg.title ?? 'Security Alert',
+        body: msg.body ?? 'A security event occurred at your door.',
+        notificationLayout: NotificationLayout.Default,
+      ),
+    );
+  }
+
+  void connect(String wsUrl, {int? userId}) {
+    final url = userId != null ? '$wsUrl&user_id=$userId' : wsUrl;
+    _service.connect(url);
+  }
   void disconnect() => _service.disconnect();
 
   @override

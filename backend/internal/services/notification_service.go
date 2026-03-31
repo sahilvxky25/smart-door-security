@@ -27,13 +27,11 @@ func (n *NotificationService) Notify(eventType, imageURL string) {
 	n.hub.BroadcastAlert(eventType, title, body, imageURL)
 }
 
-// NotifyUnknownVisitor sends a legacy unknown_visitor WebSocket message to all
-// owner clients. This uses a dedicated message format (type="unknown_visitor")
-// that triggers the video call UI in the Flutter app in addition to showing a
-// local notification.
-func (n *NotificationService) NotifyUnknownVisitor(imageURL string) {
-	log.Printf("[NotificationService] Unknown visitor – notifying owner at %s", time.Now().Format(time.RFC3339))
-	n.hub.NotifyOwner(imageURL)
+// TriggerIncomingCall sends an incoming_call WebSocket message to all owner
+// clients. This triggers the high-priority "Awesome Notification" call UI.
+func (n *NotificationService) TriggerIncomingCall(imageURL string) {
+	log.Printf("[NotificationService] Security event – triggering incoming call at %s", time.Now().Format(time.RFC3339))
+	n.hub.BroadcastIncomingCall(imageURL)
 }
 
 // alertText returns a human-readable title and body for each event type.
@@ -51,6 +49,8 @@ func alertText(eventType string) (title, body string) {
 		return "Visitor Approaching", "Someone is approaching your door."
 	case models.EventUnknownVisitor:
 		return "Unknown Visitor", "An unrecognized person is at your door."
+	case models.EventMotorTamper:
+		return "Motor Tamper Detected!", "The door lock servo was moved without authorisation."
 	default:
 		return "Security Alert", "A security event occurred at your door."
 	}

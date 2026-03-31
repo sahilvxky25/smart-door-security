@@ -21,6 +21,8 @@ type CameraService struct {
 	db           *gorm.DB
 	notifySvc    *NotificationService
 	soundService *SoundService
+	ultrasonicSvc *UltrasonicService
+	isCallActive  func() bool
 }
 
 func NewCameraService(
@@ -45,10 +47,36 @@ func NewCameraService(
 	}
 }
 
+func (c *CameraService) SetUltrasonicService(svc *UltrasonicService) {
+	c.ultrasonicSvc = svc
+}
+
+func (c *CameraService) SetCallActiveCheckFn(fn func() bool) {
+	c.isCallActive = fn
+}
+
 // HandleMotion is called when the PIR sensor detects motion.
-// It runs the full decision engine: capture → recognize → act.
+// It logs an "approaching" alert and then runs the full face recognition
+// pipeline only if the ultrasonic sensor confirms a visitor at the door.
 func (c *CameraService) HandleMotion() {
-	log.Println("[Pipeline] PIR triggered → asking face service to capture & recognize")
+	if c.isCallActive != nil && c.isCallActive() {
+		log.Println("[Pipeline] PIR triggered but video call is active – skipping face detection")
+		return
+	}
+
+	if c.ultrasonicSvc != nil && !c.ultrasonicSvc.IsAtDoor() {
+		log.Println("[Pipeline] PIR triggered but ultrasonic confirms no visitor at < 20cm – skipping camera")
+		return
+	}
+
+	// 1. Log the approach event (PIR + Ultrasonic confirmed) with global debouncing
+	event, _ := c.eventService.LogEventWithDebounce(models.EventVisitorApproaching, "", VisitorAlertDebounce)
+	if event != nil {
+		log.Println("[Pipeline] PIR + Ultrasonic match → Visitor approaching notification")
+		c.notifySvc.Notify(models.EventVisitorApproaching, "")
+	}
+
+	log.Println("[Pipeline] PIR + Ultrasonic match → asking face service to capture & recognize")
 
 	result, err := c.faceService.CaptureAndRecognize()
 	if err != nil {
@@ -56,13 +84,13 @@ func (c *CameraService) HandleMotion() {
 		return
 	}
 
-	// Upload captured frame to MinIO
+	// Upload captured frame to Cloudinary
 	imageURL := ""
 	if len(result.FrameJPG) > 0 {
 		objectName := fmt.Sprintf("events/%d.jpg", time.Now().UnixMilli())
 		url, err := c.storage.UploadImage(context.Background(), objectName, result.FrameJPG, "image/jpeg")
 		if err != nil {
-			log.Printf("[Pipeline] Failed to upload image to MinIO: %v", err)
+			log.Printf("[Pipeline] Failed to upload image to Cloudinary: %v", err)
 		} else {
 			imageURL = url
 		}
@@ -71,29 +99,23 @@ func (c *CameraService) HandleMotion() {
 	// Decision engine
 	switch {
 	case result.Spoof:
-		log.Println("[Pipeline] SPOOF DETECTED → creating event + alert")
-		c.eventService.LogEvent(models.EventSpoofAttempt, nil, imageURL)
-		c.notifySvc.Notify(models.EventSpoofAttempt, imageURL)
+		log.Println("[Pipeline] SPOOF DETECTED → creating event + triggering call")
+		c.eventService.LogEvent(models.EventSpoofAttempt, imageURL)
+		c.notifySvc.TriggerIncomingCall(imageURL)
 		c.soundService.PlaySOS()
 
 	case result.Match:
-		log.Printf("[Pipeline] Authorized user %q → unlocking door", result.User)
+		log.Printf("[Pipeline] Authorized face %q → unlocking door", result.User)
 		c.doorService.UnlockDoor()
 		c.soundService.PlayWelcome()
 
-		var userID *uint
-		var user models.User
-		if err := c.db.Where("name = ?", result.User).First(&user).Error; err == nil {
-			userID = &user.ID
-		} else {
-			log.Printf("[Pipeline] Warning: recognized user %q not found in DB: %v", result.User, err)
-		}
-		c.eventService.LogEvent(models.EventAuthorizedEntry, userID, imageURL)
+		c.eventService.LogEvent(models.EventAuthorizedEntry, imageURL)
 
 	default:
-		log.Println("[Pipeline] Unknown visitor → storing image + notifying owner")
-		c.eventService.LogEvent(models.EventUnknownVisitor, nil, imageURL)
+		log.Println("[Pipeline] Unknown visitor → storing image + triggering call")
+		// hardware events belong to the public feed, so userID remains nil
+		c.eventService.LogEvent(models.EventUnknownVisitor, imageURL)
 		c.mqttClient.Publish("home/door/unknown_visitor", 0, false, imageURL)
-		c.notifySvc.NotifyUnknownVisitor(imageURL)
+		c.notifySvc.TriggerIncomingCall(imageURL)
 	}
 }

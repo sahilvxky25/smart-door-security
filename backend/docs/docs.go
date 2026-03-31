@@ -68,6 +68,34 @@ const docTemplate = `{
                 }
             }
         },
+        "/auth/signout": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Invalidates the client session. Because JWTs are stateless, the",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Sign out",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/auth/signup": {
             "post": {
                 "description": "Creates a new user account and returns a JWT",
@@ -123,7 +151,12 @@ const docTemplate = `{
         },
         "/door/lock": {
             "post": {
-                "description": "Sends an MQTT command to lock the door servo",
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Sends an MQTT LOCK command to the servo. Logs a MANUAL_LOCK event.",
                 "produces": [
                     "application/json"
                 ],
@@ -140,13 +173,61 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/door/state": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the servo angle and lock state last commanded by the backend (LOCKED / UNLOCKED).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "door"
+                ],
+                "summary": "Get current door lock state",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.DoorStateResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
         },
         "/door/unlock": {
             "post": {
-                "description": "Sends an MQTT command to unlock the door servo and logs a MANUAL_UNLOCK event",
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Sends an MQTT UNLOCK command to the servo and auto-locks after 5 s. Logs a MANUAL_UNLOCK event.",
                 "produces": [
                     "application/json"
                 ],
@@ -157,6 +238,15 @@ const docTemplate = `{
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -568,6 +658,19 @@ const docTemplate = `{
                 }
             }
         },
+        "api.DoorStateResponse": {
+            "type": "object",
+            "properties": {
+                "expected_angle": {
+                    "type": "integer",
+                    "example": 0
+                },
+                "state": {
+                    "type": "string",
+                    "example": "LOCKED"
+                }
+            }
+        },
         "api.SignInRequest": {
             "type": "object",
             "required": [
@@ -602,6 +705,14 @@ const docTemplate = `{
                     "minLength": 6
                 }
             }
+        }
+    },
+    "securityDefinitions": {
+        "BearerAuth": {
+            "description": "Enter: Bearer {your-jwt-token}",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
         }
     }
 }`

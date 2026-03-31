@@ -8,16 +8,15 @@ import (
 )
 
 type Config struct {
-	DB_URL           string
-	MQTT_BROKER      string
-	PORT             string
-	JWT_SECRET       string
-	FACE_SERVICE_URL string
-	MINIO_ENDPOINT   string
-	MINIO_ACCESS_KEY string
-	MINIO_SECRET_KEY string
-	MINIO_BUCKET     string
-	BACKEND_URL      string
+	DB_URL               string
+	MQTT_BROKER          string
+	PORT                 string
+	JWT_SECRET           string
+	FACE_SERVICE_URL     string
+	CLOUDINARY_CLOUD_NAME string
+	CLOUDINARY_API_KEY    string
+	CLOUDINARY_API_SECRET string
+	BACKEND_URL          string
 }
 
 func LoadConfig() *Config {
@@ -28,32 +27,21 @@ func LoadConfig() *Config {
 		faceURL = "http://localhost:5000"
 	}
 
-	minioEndpoint := os.Getenv("MINIO_ENDPOINT")
-	if minioEndpoint == "" {
-		minioEndpoint = "localhost:9000"
-	}
-
-	minioBucket := os.Getenv("MINIO_BUCKET")
-	if minioBucket == "" {
-		minioBucket = "door-images"
-	}
-
 	backendURL := os.Getenv("BACKEND_URL")
 	if backendURL == "" {
 		backendURL = "http://localhost:8080"
 	}
 
 	return &Config{
-		DB_URL:           os.Getenv("DB_URL"),
-		MQTT_BROKER:      os.Getenv("MQTT_BROKER"),
-		PORT:             os.Getenv("PORT"),
-		JWT_SECRET:       os.Getenv("JWT_SECRET"),
-		FACE_SERVICE_URL: faceURL,
-		MINIO_ENDPOINT:   minioEndpoint,
-		MINIO_ACCESS_KEY: os.Getenv("MINIO_ACCESS_KEY"),
-		MINIO_SECRET_KEY: os.Getenv("MINIO_SECRET_KEY"),
-		MINIO_BUCKET:     minioBucket,
-		BACKEND_URL:      backendURL,
+		DB_URL:               os.Getenv("DB_URL"),
+		MQTT_BROKER:          os.Getenv("MQTT_BROKER"),
+		PORT:                 os.Getenv("PORT"),
+		JWT_SECRET:           os.Getenv("JWT_SECRET"),
+		FACE_SERVICE_URL:     faceURL,
+		CLOUDINARY_CLOUD_NAME: os.Getenv("CLOUDINARY_CLOUD_NAME"),
+		CLOUDINARY_API_KEY:    os.Getenv("CLOUDINARY_API_KEY"),
+		CLOUDINARY_API_SECRET: os.Getenv("CLOUDINARY_API_SECRET"),
+		BACKEND_URL:          backendURL,
 	}
 }
 

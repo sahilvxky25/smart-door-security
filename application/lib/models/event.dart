@@ -10,7 +10,7 @@ class Event {
   final int id;
   final DateTime timestamp;
   final String eventType;
-  final int? userId;
+  final int userId;
   final User? user;
   final String imageUrl;
 
@@ -18,7 +18,7 @@ class Event {
     required this.id,
     required this.timestamp,
     required this.eventType,
-    this.userId,
+    required this.userId,
     this.user,
     required this.imageUrl,
   });
@@ -28,7 +28,7 @@ class Event {
       id: json['id'] as int,
       timestamp: DateTime.parse(json['timestamp'] as String),
       eventType: json['event_type'] as String,
-      userId: json['user_id'] as int?,
+      userId: json['user_id'] as int,
       user: json['user'] != null ? User.fromJson(json['user']) : null,
       imageUrl: (json['image_url'] as String?) ?? '',
     );

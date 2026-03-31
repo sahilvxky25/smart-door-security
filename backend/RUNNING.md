@@ -10,7 +10,7 @@
 
 ## Option 1: Run with Docker Compose (Recommended)
 
-This starts PostgreSQL, Mosquitto (MQTT broker), MinIO, and the backend all at once.
+This starts PostgreSQL, Mosquitto (MQTT broker), and the backend all at once. Media storage is handled via Cloudinary.
 
 ```bash
 docker compose up --build
@@ -30,10 +30,10 @@ docker compose down
 
 ### 1. Start Infrastructure Services
 
-Start PostgreSQL, Mosquitto, and MinIO via Docker:
+Start PostgreSQL and Mosquitto via Docker:
 
 ```bash
-docker compose up postgres mosquitto minio
+docker compose up postgres mosquitto
 ```
 
 ### 2. Configure Environment Variables
@@ -98,7 +98,7 @@ swag init -g cmd/server/main.go
 | Backend    | 8080 |
 | PostgreSQL | 5432 |
 | MQTT       | 1883 |
-| MinIO      | 9000 |
+| Cloudinary | API  |
 
 ---
 
@@ -115,7 +115,7 @@ internal/
   mqtt/             # MQTT client, publisher, subscriber
   repository/       # Database access layer
   services/         # Business logic
-  storage/          # MinIO media storage
+  storage/          # Cloudinary media storage
   utils/            # JWT helpers and utilities
   webrtc/           # WebRTC peer and signalling
 scripts/

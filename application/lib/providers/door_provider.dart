@@ -37,4 +37,14 @@ class DoorProvider extends ChangeNotifier {
     locking = false;
     notifyListeners();
   }
+
+  Future<void> fetchState() async {
+    try {
+      final state = await _api.getDoorState();
+      lastStatus = state['state'] == 'LOCKED' ? 'Locked' : 'Unlocked';
+      notifyListeners();
+    } catch (_) {
+      // Keep existing status on error
+    }
+  }
 }

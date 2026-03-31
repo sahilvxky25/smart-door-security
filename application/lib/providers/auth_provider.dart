@@ -21,9 +21,10 @@ class AuthProvider extends ChangeNotifier {
     final id = prefs.getInt('user_id');
     final name = prefs.getString('user_name') ?? '';
     final email = prefs.getString('user_email') ?? '';
+    final photoUrl = prefs.getString('user_photo_url');
     if (token != null && id != null) {
       _token = token;
-      _user = User(id: id, name: name, email: email, createdAt: DateTime.now());
+      _user = User(id: id, name: name, email: email, photoUrl: photoUrl, createdAt: DateTime.now());
       api.token = token;
     }
     _loading = false;
@@ -71,6 +72,20 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  /// Update the local user's photo URL after a successful upload.
+  void updatePhotoUrl(String url) {
+    if (_user == null) return;
+    _user = User(
+      id: _user!.id,
+      name: _user!.name,
+      email: _user!.email,
+      photoUrl: url,
+      createdAt: _user!.createdAt,
+    );
+    _save(); // persist photo URL to survive app restarts
+    notifyListeners();
+  }
+
   Future<void> signOut(ApiService api) async {
     _token = null;
     _user = null;
@@ -81,6 +96,7 @@ class AuthProvider extends ChangeNotifier {
     await prefs.remove('user_id');
     await prefs.remove('user_name');
     await prefs.remove('user_email');
+    await prefs.remove('user_photo_url');
     notifyListeners();
   }
 
@@ -90,5 +106,10 @@ class AuthProvider extends ChangeNotifier {
     await prefs.setInt('user_id', _user!.id);
     await prefs.setString('user_name', _user!.name);
     await prefs.setString('user_email', _user!.email);
+    if (_user!.photoUrl != null) {
+      await prefs.setString('user_photo_url', _user!.photoUrl!);
+    } else {
+      await prefs.remove('user_photo_url');
+    }
   }
 }

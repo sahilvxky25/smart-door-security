@@ -24,6 +24,10 @@ import (
 // @description Backend API for the Smart Door Security system. Manages door access, face recognition, intrusion detection, and MQTT-based IoT communication.
 // @host localhost:8080
 // @BasePath /
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Enter: Bearer {your-jwt-token}
 func main() {
 
 	// Load configuration
@@ -39,38 +43,47 @@ func main() {
 	// Initialize MQTT client
 	mqttClient := mqtt.NewClient(cfg.MQTT_BROKER)
 
-	// Initialize MinIO storage
+	// Initialize Cloudinary storage
 	mediaStore, err := storage.NewMediaStorage(
-		cfg.MINIO_ENDPOINT,
-		cfg.MINIO_ACCESS_KEY,
-		cfg.MINIO_SECRET_KEY,
-		cfg.MINIO_BUCKET,
-		cfg.BACKEND_URL,
+		cfg.CLOUDINARY_CLOUD_NAME,
+		cfg.CLOUDINARY_API_KEY,
+		cfg.CLOUDINARY_API_SECRET,
 	)
 	if err != nil {
-		log.Fatal("MinIO connection failed:", err)
+		log.Fatal("Cloudinary connection failed:", err)
 	}
 
 	// Initialize WebRTC signaling hub
 	signalingHub := webrtc.NewHub()
 	go signalingHub.Run()
 
+	// Start in-process door WebRTC peer (replaces browser-based door.html)
+	doorRecv, doorSendFn := signalingHub.RegisterLocalDoor()
+	doorPeer := webrtc.NewDoorPeer(doorRecv, doorSendFn, nil)
+	go doorPeer.Run()
+
 	// Initialize services (notificationService first — all sensor services depend on it)
 	eventService        := services.NewEventService(db)
+	eventService.OnEventCreated = func(event *models.Event) {
+		signalingHub.BroadcastEventUpdate(event.EventType)
+	}
+	eventService.GetActiveOwner = signalingHub.GetActiveOwnerID
 	authService         := services.NewAuthService(db, cfg.JWT_SECRET)
-	doorService         := services.NewDoorService(mqttClient)
+	doorService         := services.NewDoorService(mqttClient, eventService)
 	faceService         := services.NewFaceService(cfg.FACE_SERVICE_URL)
 	soundService        := services.NewSoundService()
 	notificationService := services.NewNotificationService(signalingHub)
-	intrusionService    := services.NewIntrusionService(db, eventService, soundService, notificationService)
+	vibrationService    := services.NewVibrationService(db, eventService, soundService, notificationService, doorService)
 	cameraService       := services.NewCameraService(faceService, doorService, eventService, mediaStore, mqttClient, db, notificationService, soundService)
+	cameraService.SetCallActiveCheckFn(doorPeer.IsCallActive)
 	proximityService    := services.NewProximityService(db, mqttClient, eventService, notificationService)
 	ultrasonicService   := services.NewUltrasonicService(db, mqttClient, eventService, cameraService, notificationService)
-	hallService         := services.NewHallService(db, eventService, soundService, notificationService)
-	doorStateService    := services.NewDoorStateService(db, eventService, soundService, notificationService)
+	cameraService.SetUltrasonicService(ultrasonicService)
+	magneticService     := services.NewMagneticService(db, eventService, doorService, soundService, notificationService)
+	motorService        := services.NewMotorService(doorService, eventService, soundService, notificationService)
 
 	// Start MQTT subscribers
-	mqtt.StartSubscribers(mqttClient, cameraService, intrusionService, proximityService, ultrasonicService, hallService, doorStateService)
+	mqtt.StartSubscribers(mqttClient, cameraService, vibrationService, proximityService, ultrasonicService, magneticService, motorService)
 
 	// Initialize API router
 	router := api.NewRouter(
@@ -78,12 +91,13 @@ func main() {
 		authService,
 		doorService,
 		cameraService,
-		intrusionService,
+		vibrationService,
 		notificationService,
 		faceService,
 		eventService,
 		signalingHub,
 		mediaStore,
+		cfg.JWT_SECRET,
 	)
 
 	// Start HTTP server

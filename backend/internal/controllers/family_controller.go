@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -39,7 +40,8 @@ func NewFamilyController(
 // @Success 200 {object} map[string]interface{}
 // @Router /family [get]
 func (fc *FamilyController) ListMembers(c *gin.Context) {
-	members, err := fc.repo.List()
+	userID := c.MustGet("user_id").(uint)
+	members, err := fc.repo.List(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list members"})
 		return
@@ -61,7 +63,8 @@ func (fc *FamilyController) GetMember(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-	m, err := fc.repo.Get(id)
+	userID := c.MustGet("user_id").(uint)
+	m, err := fc.repo.Get(userID, id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
 		return
@@ -97,13 +100,14 @@ func (fc *FamilyController) CreateMember(c *gin.Context) {
 	}
 
 	// Check duplicate
-	existing, _ := fc.repo.GetByName(req.Name)
+	userID := c.MustGet("user_id").(uint)
+	existing, _ := fc.repo.GetByName(userID, req.Name)
 	if existing != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("member %q already exists", req.Name)})
 		return
 	}
 
-	m := &models.FamilyMember{Name: req.Name}
+	m := &models.FamilyMember{Name: req.Name, UserID: userID}
 	if err := fc.repo.Create(m); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create member"})
 		return
@@ -137,15 +141,16 @@ func (fc *FamilyController) UpdateMember(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name must not be blank"})
 		return
 	}
-
-	m, err := fc.repo.Get(id)
+	
+	userID := c.MustGet("user_id").(uint)
+	m, err := fc.repo.Get(userID, id)
 	if err != nil || m == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
 		return
 	}
 
 	// Check new name not taken by someone else
-	other, _ := fc.repo.GetByName(req.Name)
+	other, _ := fc.repo.GetByName(userID, req.Name)
 	if other != nil && other.ID != m.ID {
 		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("name %q is already taken", req.Name)})
 		return
@@ -158,7 +163,7 @@ func (fc *FamilyController) UpdateMember(c *gin.Context) {
 	if m.FaceEnrolled && oldName != req.Name {
 		// We can't re-enroll without the original image; unenroll the old name so
 		// the user re-enrolls with the new name.
-		_ = fc.faceService.DeleteFace(oldName)
+		_ = fc.faceService.DeleteFace(fmt.Sprintf("%d_%s", userID, oldName))
 		m.FaceEnrolled = false
 	}
 
@@ -181,8 +186,9 @@ func (fc *FamilyController) DeleteMember(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-
-	m, err := fc.repo.Get(id)
+	
+	userID := c.MustGet("user_id").(uint)
+	m, err := fc.repo.Get(userID, id)
 	if err != nil || m == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
 		return
@@ -190,13 +196,13 @@ func (fc *FamilyController) DeleteMember(c *gin.Context) {
 
 	// Remove face enrollment (best-effort)
 	if m.FaceEnrolled {
-		if ferr := fc.faceService.DeleteFace(m.Name); ferr != nil {
+		if ferr := fc.faceService.DeleteFace(fmt.Sprintf("%d_%s", userID, m.Name)); ferr != nil {
 			// Log but don't fail the delete
 			_ = ferr
 		}
 	}
 
-	if err := fc.repo.Delete(id); err != nil {
+	if err := fc.repo.Delete(userID, id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete member"})
 		return
 	}
@@ -217,8 +223,9 @@ func (fc *FamilyController) EnrollFace(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-
-	m, err := fc.repo.Get(id)
+	
+	userID := c.MustGet("user_id").(uint)
+	m, err := fc.repo.Get(userID, id)
 	if err != nil || m == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
 		return
@@ -226,22 +233,12 @@ func (fc *FamilyController) EnrollFace(c *gin.Context) {
 
 	// Parse multipart photo
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxPhotoSize)
-	file, header, err := c.Request.FormFile("photo")
+	file, _, err := c.Request.FormFile("photo")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "photo field is required (multipart/form-data)"})
 		return
 	}
 	defer file.Close()
-
-	// Validate content type
-	contentType := header.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "image/jpeg"
-	}
-	if !strings.HasPrefix(contentType, "image/") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "uploaded file must be an image"})
-		return
-	}
 
 	imageBytes, err := io.ReadAll(file)
 	if err != nil {
@@ -253,7 +250,20 @@ func (fc *FamilyController) EnrollFace(c *gin.Context) {
 		return
 	}
 
-	// Upload photo to MinIO first
+	// Sniff the actual content type from the file bytes — more reliable than
+	// trusting the client-supplied Content-Type header (which Android may omit
+	// or set to application/octet-stream for extensionless filenames).
+	sniffLen := 512
+	if len(imageBytes) < sniffLen {
+		sniffLen = len(imageBytes)
+	}
+	sniffed := http.DetectContentType(imageBytes[:sniffLen])
+	if !strings.HasPrefix(sniffed, "image/") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "uploaded file must be an image"})
+		return
+	}
+
+	// Upload photo to Cloudinary
 	objectName := fmt.Sprintf("family/%d_%d.jpg", id, time.Now().UnixMilli())
 	photoURL, err := fc.store.UploadImage(context.Background(), objectName, imageBytes, "image/jpeg")
 	if err != nil {
@@ -262,18 +272,19 @@ func (fc *FamilyController) EnrollFace(c *gin.Context) {
 	}
 
 	// Enroll face in the recognition model
-	if err := fc.faceService.EnrollFace(m.Name, imageBytes); err != nil {
+	faceName := fmt.Sprintf("%d_%s", userID, m.Name)
+	if err := fc.faceService.EnrollFace(faceName, imageBytes); err != nil {
 		// Enrollment failed — clean up the uploaded photo so storage stays consistent
 		_ = fc.store.DeleteObject(context.Background(), objectName)
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Remove old photo from MinIO if there was one
+	// Remove old photo from Cloudinary if there was one
 	if m.PhotoURL != "" && m.FaceEnrolled {
-		oldObject := extractObjectName(m.PhotoURL)
-		if oldObject != "" {
-			_ = fc.store.DeleteObject(context.Background(), oldObject)
+		oldPublicID := extractCloudinaryPublicID(m.PhotoURL)
+		if oldPublicID != "" {
+			_ = fc.store.DeleteByPublicID(context.Background(), oldPublicID)
 		}
 	}
 
@@ -299,8 +310,9 @@ func (fc *FamilyController) UnenrollFace(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-
-	m, err := fc.repo.Get(id)
+	
+	userID := c.MustGet("user_id").(uint)
+	m, err := fc.repo.Get(userID, id)
 	if err != nil || m == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "member not found"})
 		return
@@ -311,7 +323,7 @@ func (fc *FamilyController) UnenrollFace(c *gin.Context) {
 		return
 	}
 
-	if err := fc.faceService.DeleteFace(m.Name); err != nil {
+	if err := fc.faceService.DeleteFace(fmt.Sprintf("%d_%s", userID, m.Name)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove face from model"})
 		return
 	}
@@ -325,15 +337,17 @@ func (fc *FamilyController) UnenrollFace(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"member": m})
 }
 
-// extractObjectName strips the backend proxy prefix from a stored photo URL
-// e.g. "http://host:8080/images/family/1_123.jpg" → "family/1_123.jpg"
-func extractObjectName(photoURL string) string {
-	const prefix = "/images/"
-	idx := strings.Index(photoURL, prefix)
-	if idx < 0 {
+// cloudinaryPublicIDRegex extracts the public_id from a Cloudinary secure URL.
+// e.g. "https://res.cloudinary.com/xxx/image/upload/v123/door-images/family/1_123.jpg"
+// → "door-images/family/1_123"
+var cloudinaryPublicIDRegex = regexp.MustCompile(`/upload/(?:v\d+/)?(.+?)(?:\.[a-zA-Z]+)?$`)
+
+func extractCloudinaryPublicID(photoURL string) string {
+	matches := cloudinaryPublicIDRegex.FindStringSubmatch(photoURL)
+	if len(matches) < 2 {
 		return ""
 	}
-	return photoURL[idx+len(prefix):]
+	return matches[1]
 }
 
 func parseID(c *gin.Context) (uint, error) {

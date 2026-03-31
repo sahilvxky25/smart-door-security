@@ -28,7 +28,7 @@ func (i *IntrusionService) HandleIntrusion() {
 	log.Println("[IntrusionService] Vibration detected → triggering alert")
 
 	i.soundService.PlaySOS()
-	i.eventService.LogEvent(models.EventForcedEntry, nil, "")
+	i.eventService.LogEvent(models.EventForcedEntry, "")
 	i.notify.Notify(models.EventForcedEntry, "")
 
 	log.Printf("[IntrusionService] SOS alert played and event logged at %s", time.Now().Format(time.RFC3339))

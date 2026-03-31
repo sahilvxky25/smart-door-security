@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:provider/provider.dart';
 import 'config/app_config.dart';
+import 'config/app_theme.dart';
 import 'models/event.dart';
 import 'providers/auth_provider.dart';
 import 'providers/call_provider.dart';
@@ -14,6 +15,7 @@ import 'screens/event_detail_screen.dart';
 import 'screens/events_screen.dart';
 import 'screens/family_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/incoming_call_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/settings_screen.dart';
@@ -27,29 +29,45 @@ void main() async {
   // Load config from SharedPreferences
   final config = await AppConfig.load();
 
-  // Initialize local notifications
-  const AndroidInitializationSettings androidInit =
-      AndroidInitializationSettings('@mipmap/ic_launcher');
-  const InitializationSettings initSettings = InitializationSettings(
-    android: androidInit,
-  );
-  final notifications = FlutterLocalNotificationsPlugin();
-  await notifications.initialize(
-    initSettings,
-    // Navigate to call screen when user taps an incoming-visitor notification.
-    onDidReceiveNotificationResponse: (details) {
-      MyApp.navigatorKey.currentState?.pushNamed('/call');
-    },
+  // Initialize Awesome Notifications
+  AwesomeNotifications().initialize(
+    null, // default icon (uses launcher icon)
+    [
+      NotificationChannel(
+        channelKey: 'call_channel',
+        channelName: 'Calls',
+        channelDescription: 'Incoming video call notifications',
+        defaultColor: const Color(0xFF9D50BB),
+        ledColor: Colors.white,
+        importance: NotificationImportance.Max,
+        channelShowBadge: true,
+        locked: true,
+        defaultRingtoneType: DefaultRingtoneType.Ringtone,
+      ),
+      NotificationChannel(
+        channelKey: 'alerts_channel',
+        channelName: 'Alerts',
+        channelDescription: 'Security alert notifications',
+        defaultColor: const Color(0xFF9D50BB),
+        ledColor: Colors.white,
+        importance: NotificationImportance.High,
+      ),
+    ],
   );
 
-  runApp(MyApp(config: config, notifications: notifications));
+  // Request notification permissions
+  bool isAllowed = await AwesomeNotifications().isNotificationAllowed();
+  if (!isAllowed) {
+    await AwesomeNotifications().requestPermissionToSendNotifications();
+  }
+
+  runApp(MyApp(config: config));
 }
 
 class MyApp extends StatelessWidget {
   final AppConfig config;
-  final FlutterLocalNotificationsPlugin notifications;
 
-  const MyApp({super.key, required this.config, required this.notifications});
+  const MyApp({super.key, required this.config});
 
   static final GlobalKey<NavigatorState> navigatorKey =
       GlobalKey<NavigatorState>();
@@ -62,6 +80,11 @@ class MyApp extends StatelessWidget {
       signaling: signalingService,
       config: config,
     );
+    final callProvider = CallProvider(
+      webrtc: webrtcService,
+      signaling: signalingService,
+    );
+    final eventProvider = EventProvider(api: apiService);
 
     return MultiProvider(
       providers: [
@@ -70,22 +93,19 @@ class MyApp extends StatelessWidget {
         Provider<SignalingService>(create: (_) => signalingService),
         Provider<WebRTCService>(create: (_) => webrtcService),
         ChangeNotifierProvider<AuthProvider>(create: (_) => AuthProvider()),
-        ChangeNotifierProvider<EventProvider>(
-          create: (_) => EventProvider(api: apiService),
-        ),
+        ChangeNotifierProvider<EventProvider>.value(value: eventProvider),
         ChangeNotifierProvider<DoorProvider>(
           create: (_) => DoorProvider(api: apiService),
         ),
+        ChangeNotifierProvider<CallProvider>.value(value: callProvider),
         ChangeNotifierProvider<SignalingProvider>(
-          create: (_) => SignalingProvider(
+          create: (context) => SignalingProvider(
             service: signalingService,
-            notifications: notifications,
             navigatorKey: MyApp.navigatorKey,
+            callProvider: callProvider,
+            eventProvider: eventProvider,
+            doorProvider: context.read<DoorProvider>(),
           ),
-        ),
-        ChangeNotifierProvider<CallProvider>(
-          create: (context) =>
-              CallProvider(webrtc: webrtcService, signaling: signalingService),
         ),
         ChangeNotifierProvider<FamilyProvider>(
           create: (_) => FamilyProvider(api: apiService),
@@ -94,25 +114,24 @@ class MyApp extends StatelessWidget {
       child: Builder(
         builder: (context) {
           // Restore auth session, then connect WebSocket if authenticated
-          Future.microtask(() async {
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            // Capture providers before the async gap.
             final auth = context.read<AuthProvider>();
             final signaling = context.read<SignalingProvider>();
             await auth.loadFromStorage(apiService);
             if (auth.isAuthenticated) {
-              signaling.connect(config.wsUrl);
+              signaling.connect(config.wsUrl, userId: auth.user?.id);
             }
           });
 
           return MaterialApp(
             title: 'Smart Door',
-            theme: ThemeData(
-              useMaterial3: true,
-              colorSchemeSeed: Colors.indigo,
-            ),
+            theme: appTheme(),
+            debugShowCheckedModeBanner: false,
             navigatorKey: navigatorKey,
             // Auth gate: shows splash → login → home based on auth state
             home: Consumer<AuthProvider>(
-              builder: (_, auth, __) {
+              builder: (_, auth, _) {
                 if (auth.isLoading) {
                   return const Scaffold(
                     body: Center(child: CircularProgressIndicator()),
@@ -140,6 +159,11 @@ class MyApp extends StatelessWidget {
         final event = settings.arguments as Event;
         return MaterialPageRoute(
           builder: (_) => EventDetailScreen(event: event),
+        );
+      case '/incoming_call':
+        final imageUrl = settings.arguments as String?;
+        return MaterialPageRoute(
+          builder: (_) => IncomingCallScreen(imageUrl: imageUrl),
         );
       case '/call':
         return MaterialPageRoute(builder: (_) => const CallScreen());

@@ -1,11 +1,12 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import '../models/event.dart';
 import '../models/family_member.dart';
 
 class ApiService {
-  final String baseUrl;
+  String baseUrl;
   String? token;
 
   ApiService({required this.baseUrl});
@@ -40,7 +41,10 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> signUp(
-      String name, String email, String password) async {
+    String name,
+    String email,
+    String password,
+  ) async {
     final resp = await http.post(
       Uri.parse('$baseUrl/auth/signup'),
       headers: {'Content-Type': 'application/json'},
@@ -56,24 +60,41 @@ class ApiService {
   // ── Door ─────────────────────────────────────────────────────────────────
 
   Future<String> unlockDoor() async {
-    final resp = await http.post(Uri.parse('$baseUrl/door/unlock'),
-        headers: _authHeaders);
+    final resp = await http.post(
+      Uri.parse('$baseUrl/door/unlock'),
+      headers: _authHeaders,
+    );
     final body = jsonDecode(resp.body);
     return body['status'] as String;
   }
 
   Future<String> lockDoor() async {
-    final resp = await http.post(Uri.parse('$baseUrl/door/lock'),
-        headers: _authHeaders);
+    final resp = await http.post(
+      Uri.parse('$baseUrl/door/lock'),
+      headers: _authHeaders,
+    );
     final body = jsonDecode(resp.body);
     return body['status'] as String;
+  }
+
+  Future<Map<String, dynamic>> getDoorState() async {
+    final resp = await http.get(
+      Uri.parse('$baseUrl/door/state'),
+      headers: _authHeaders,
+    );
+    if (resp.statusCode != 200) {
+      throw Exception('Failed to fetch door state');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
   // ── Events ───────────────────────────────────────────────────────────────
 
   Future<List<Event>> getEvents() async {
-    final resp =
-        await http.get(Uri.parse('$baseUrl/events'), headers: _authHeaders);
+    final resp = await http.get(
+      Uri.parse('$baseUrl/events'),
+      headers: _authHeaders,
+    );
     if (resp.statusCode != 200) {
       throw Exception('Failed to fetch events: ${resp.statusCode}');
     }
@@ -83,8 +104,10 @@ class ApiService {
   }
 
   Future<Event> getEvent(int id) async {
-    final resp = await http.get(Uri.parse('$baseUrl/events/$id'),
-        headers: _authHeaders);
+    final resp = await http.get(
+      Uri.parse('$baseUrl/events/$id'),
+      headers: _authHeaders,
+    );
     if (resp.statusCode != 200) {
       throw Exception('Event not found');
     }
@@ -95,8 +118,10 @@ class ApiService {
   // ── Family members ───────────────────────────────────────────────────────
 
   Future<List<FamilyMember>> getFamilyMembers() async {
-    final resp =
-        await http.get(Uri.parse('$baseUrl/family'), headers: _authHeaders);
+    final resp = await http.get(
+      Uri.parse('$baseUrl/family'),
+      headers: _authHeaders,
+    );
     if (resp.statusCode != 200) {
       throw Exception('Failed to fetch family members: ${resp.statusCode}');
     }
@@ -125,25 +150,33 @@ class ApiService {
   }
 
   Future<void> deleteFamilyMember(int id) async {
-    final resp = await http.delete(Uri.parse('$baseUrl/family/$id'),
-        headers: _authHeaders);
+    final resp = await http.delete(
+      Uri.parse('$baseUrl/family/$id'),
+      headers: _authHeaders,
+    );
     if (resp.statusCode != 200) {
       throw Exception('Failed to delete member');
     }
   }
 
   Future<FamilyMember> enrollFace(
-      int id, Uint8List photoBytes, String filename) async {
+    int id,
+    Uint8List photoBytes,
+    String filename,
+  ) async {
     final request = http.MultipartRequest(
       'POST',
       Uri.parse('$baseUrl/family/$id/enroll'),
     );
     request.headers.addAll(_authHeaders);
-    request.files.add(http.MultipartFile.fromBytes(
-      'photo',
-      photoBytes,
-      filename: filename,
-    ));
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        'photo',
+        photoBytes,
+        filename: filename,
+        contentType: MediaType('image', 'jpeg'),
+      ),
+    );
     final streamed = await request.send();
     final resp = await http.Response.fromStream(streamed);
     if (resp.statusCode == 422) {
@@ -159,12 +192,39 @@ class ApiService {
   }
 
   Future<FamilyMember> unenrollFace(int id) async {
-    final resp = await http.delete(Uri.parse('$baseUrl/family/$id/enroll'),
-        headers: _authHeaders);
+    final resp = await http.delete(
+      Uri.parse('$baseUrl/family/$id/enroll'),
+      headers: _authHeaders,
+    );
     if (resp.statusCode != 200) {
       throw Exception('Failed to unenroll face');
     }
     final body = jsonDecode(resp.body);
     return FamilyMember.fromJson(body['member'] as Map<String, dynamic>);
+  }
+
+  // ── Profile photo ─────────────────────────────────────────────────────────
+
+  Future<String> uploadProfilePhoto(
+    String userName,
+    Uint8List photoBytes,
+    String filename,
+  ) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$baseUrl/profile/photo?name=$userName'),
+    );
+    request.headers.addAll(_authHeaders);
+    request.files.add(
+      http.MultipartFile.fromBytes('photo', photoBytes, filename: filename),
+    );
+    final streamed = await request.send();
+    final resp = await http.Response.fromStream(streamed);
+    if (resp.statusCode != 200) {
+      final body = jsonDecode(resp.body);
+      throw Exception(body['error'] ?? 'Upload failed');
+    }
+    final body = jsonDecode(resp.body);
+    return body['photo_url'] as String;
   }
 }

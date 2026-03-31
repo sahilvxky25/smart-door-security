@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -21,18 +22,21 @@ var upgrader = websocket.Upgrader{
 
 // Client represents a single WebSocket connection with a role.
 type Client struct {
-	hub  *Hub
-	conn *websocket.Conn
-	role string // "door" or "owner"
-	send chan []byte
+	hub    *Hub
+	conn   *websocket.Conn
+	role   string // "door" or "owner"
+	userID uint   // 0 if not authenticated
+	send   chan []byte
 }
 
 // Hub maintains active clients and relays messages between door and owner.
 type Hub struct {
-	mu         sync.RWMutex
-	clients    map[*Client]bool
-	register   chan *Client
-	unregister chan *Client
+	mu            sync.RWMutex
+	clients       map[*Client]bool
+	register      chan *Client
+	unregister    chan *Client
+	localDoorRecv chan []byte // in-process door peer reads from this channel
+	activeOwnerID *uint       // user ID of the currently connected owner
 }
 
 func NewHub() *Hub {
@@ -51,9 +55,12 @@ func (h *Hub) Run() {
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client] = true
+			if client.role == "owner" && client.userID != 0 {
+				h.activeOwnerID = &client.userID
+			}
 			h.mu.Unlock()
-			log.Printf("[SignalingHub] Client registered: role=%s addr=%s total=%d",
-				client.role, client.conn.RemoteAddr(), len(h.clients))
+			log.Printf("[SignalingHub] Client registered: role=%s userID=%d addr=%s total=%d",
+				client.role, client.userID, client.conn.RemoteAddr(), len(h.clients))
 
 		case client := <-h.unregister:
 			h.mu.Lock()
@@ -72,6 +79,16 @@ func (h *Hub) Run() {
 func (h *Hub) broadcast(message []byte, targetRole string) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+
+	// Deliver to local door peer when targeting "door"
+	if targetRole == "door" && h.localDoorRecv != nil {
+		select {
+		case h.localDoorRecv <- message:
+		default:
+			log.Println("[SignalingHub] Local door peer recv buffer full, dropping message")
+		}
+	}
+
 	for client := range h.clients {
 		if client.role == targetRole {
 			select {
@@ -82,6 +99,34 @@ func (h *Hub) broadcast(message []byte, targetRole string) {
 				delete(h.clients, client)
 			}
 		}
+	}
+}
+
+// RegisterLocalDoor creates a channel pair for an in-process door peer.
+// recv: the door peer reads incoming messages from this channel.
+// send: the door peer writes outgoing messages via this function, which relays them to all owner clients.
+func (h *Hub) RegisterLocalDoor() (recv <-chan []byte, send func([]byte)) {
+	ch := make(chan []byte, 256)
+	h.mu.Lock()
+	h.localDoorRecv = ch
+	h.mu.Unlock()
+
+	sendFn := func(msg []byte) {
+		h.broadcast(msg, "owner")
+	}
+
+	log.Println("[SignalingHub] Local door peer registered")
+	return ch, sendFn
+}
+
+// UnregisterLocalDoor closes the local door peer channel.
+func (h *Hub) UnregisterLocalDoor() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.localDoorRecv != nil {
+		close(h.localDoorRecv)
+		h.localDoorRecv = nil
+		log.Println("[SignalingHub] Local door peer unregistered")
 	}
 }
 
@@ -104,20 +149,45 @@ func (h *Hub) BroadcastAlert(eventType, title, body, imageURL string) {
 	log.Printf("[SignalingHub] Sent %s alert to owner clients", eventType)
 }
 
-// NotifyOwner sends an unknown_visitor notification to all connected owner clients.
-func (h *Hub) NotifyOwner(imageURL string) {
+// BroadcastIncomingCall sends an incoming_call notification to all owner clients.
+// This triggers the accept/decline UI on the Flutter app.
+func (h *Hub) BroadcastIncomingCall(imageURL string) {
 	msg := map[string]string{
-		"type":      "unknown_visitor",
+		"type":      "incoming_call",
 		"image_url": imageURL,
 		"timestamp": time.Now().Format(time.RFC3339),
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("[SignalingHub] Failed to marshal notification: %v", err)
+		log.Printf("[SignalingHub] Failed to marshal incoming call: %v", err)
 		return
 	}
 	h.broadcast(data, "owner")
-	log.Printf("[SignalingHub] Sent unknown_visitor notification to owner clients")
+	log.Printf("[SignalingHub] Sent incoming_call to owner clients")
+}
+
+// BroadcastEventUpdate notifies all connected owner clients that a new event
+// has been created, so dashboards can refresh in real-time.
+func (h *Hub) BroadcastEventUpdate(eventType string) {
+	msg := map[string]string{
+		"type":       "event_update",
+		"event_type": eventType,
+		"timestamp":  time.Now().Format(time.RFC3339),
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return
+	}
+	h.broadcast(data, "owner")
+	log.Printf("[SignalingHub] Sent event_update (%s) to owner clients", eventType)
+}
+
+// GetActiveOwnerID returns the user ID of the currently connected owner.
+// Returns nil if no owner is connected.
+func (h *Hub) GetActiveOwnerID() *uint {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.activeOwnerID
 }
 
 // HandleWebSocket is a Gin handler that upgrades HTTP to WebSocket.
@@ -134,11 +204,20 @@ func (h *Hub) HandleWebSocket(c *gin.Context) {
 		return
 	}
 
+	// Parse optional user_id from query
+	var userID uint
+	if uidStr := c.Query("user_id"); uidStr != "" {
+		if parsed, err := strconv.ParseUint(uidStr, 10, 32); err == nil {
+			userID = uint(parsed)
+		}
+	}
+
 	client := &Client{
-		hub:  h,
-		conn: conn,
-		role: role,
-		send: make(chan []byte, 256),
+		hub:    h,
+		conn:   conn,
+		role:   role,
+		userID: userID,
+		send:   make(chan []byte, 256),
 	}
 
 	h.register <- client

@@ -4,10 +4,8 @@ import (
 	"log"
 	"strconv"
 	"sync"
-	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/gottatouchsomegrass/smart-door-backend/internal/models"
 	"gorm.io/gorm"
 )
 
@@ -25,14 +23,12 @@ type UltrasonicService struct {
 	eventService  *EventService
 	cameraService *CameraService
 	notify        *NotificationService
-	mu            sync.Mutex
-	lastFired     time.Time
+	mu            sync.RWMutex
+	lastDistance  float64
 }
 
 const (
-	ultrasonicDebounce = 10 * time.Second
-	distanceAtDoorCm   = 80.0
-	distanceApproachCm = 200.0
+	distanceAtDoorCm     = 20.0
 )
 
 func NewUltrasonicService(
@@ -60,35 +56,23 @@ func (u *UltrasonicService) HandleDistance(rawPayload string) {
 		return
 	}
 
+	u.mu.Lock()
+	u.lastDistance = distanceCm
+	u.mu.Unlock()
+
 	log.Printf("[UltrasonicService] Distance reading: %.1f cm", distanceCm)
 
 	switch {
 	case distanceCm < distanceAtDoorCm:
-		// Visitor is right at the door → run face recognition pipeline
-		u.mu.Lock()
-		if time.Since(u.lastFired) < ultrasonicDebounce {
-			u.mu.Unlock()
-			log.Println("[UltrasonicService] Debounced – ignoring repeated close-range trigger")
-			return
-		}
-		u.lastFired = time.Now()
-		u.mu.Unlock()
-
-		log.Println("[UltrasonicService] Visitor at door – triggering motion pipeline")
-		go u.cameraService.HandleMotion()
-
-	case distanceCm < distanceApproachCm:
-		// Visitor approaching – log and notify
-		u.mu.Lock()
-		if time.Since(u.lastFired) < ultrasonicDebounce {
-			u.mu.Unlock()
-			return
-		}
-		u.lastFired = time.Now()
-		u.mu.Unlock()
-
-		log.Println("[UltrasonicService] Visitor approaching")
-		u.eventService.LogEvent(models.EventVisitorApproaching, nil, "")
-		u.notify.Notify(models.EventVisitorApproaching, "")
+		// Visitor is right at the door – we just log it and store it.
+		// The PIR detection will check this distance before triggering the camera.
+		log.Println("[UltrasonicService] Visitor at door (distance logic)")
 	}
+}
+
+// IsAtDoor returns true if the last measured distance is within the threshold.
+func (u *UltrasonicService) IsAtDoor() bool {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return u.lastDistance > 0 && u.lastDistance < distanceAtDoorCm
 }

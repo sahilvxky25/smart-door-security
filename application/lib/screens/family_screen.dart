@@ -2,6 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import '../config/app_theme.dart';
 import '../models/family_member.dart';
 import '../providers/family_provider.dart';
 
@@ -16,7 +17,9 @@ class _FamilyScreenState extends State<FamilyScreen> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(() => context.read<FamilyProvider>().fetchMembers());
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => context.read<FamilyProvider>().fetchMembers(),
+    );
   }
 
   @override
@@ -24,18 +27,25 @@ class _FamilyScreenState extends State<FamilyScreen> {
     final provider = context.watch<FamilyProvider>();
 
     return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: const Text('Family Members'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.add),
+            icon: const Icon(Icons.add_rounded),
             onPressed: () => _showAddMemberDialog(context),
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: () => context.read<FamilyProvider>().fetchMembers(),
-        child: _buildBody(provider),
+      body: GradientBackground(
+        child: SafeArea(
+          child: RefreshIndicator(
+            color: AppColors.purple,
+            onRefresh: () => context.read<FamilyProvider>().fetchMembers(),
+            child: _buildBody(provider),
+          ),
+        ),
       ),
     );
   }
@@ -49,9 +59,10 @@ class _FamilyScreenState extends State<FamilyScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Error: ${provider.error}'),
+            Text('Error: ${provider.error}',
+                style: const TextStyle(color: AppColors.error)),
             const SizedBox(height: 8),
-            ElevatedButton(
+            FilledButton(
               onPressed: () {
                 provider.clearError();
                 provider.fetchMembers();
@@ -63,18 +74,24 @@ class _FamilyScreenState extends State<FamilyScreen> {
       );
     }
     if (provider.members.isEmpty) {
-      return const Center(
-        child: Text(
-          'No family members yet.\nTap + to add one.',
-          textAlign: TextAlign.center,
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.people_outline, size: 48, color: AppColors.textMuted),
+            const SizedBox(height: 12),
+            const Text('No family members yet.\nTap + to add one.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppColors.textMuted)),
+          ],
         ),
       );
     }
     return ListView.separated(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(16),
       itemCount: provider.members.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (context, i) => _MemberCard(member: provider.members[i]),
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      itemBuilder: (_, i) => _MemberCard(member: provider.members[i]),
     );
   }
 
@@ -83,9 +100,11 @@ class _FamilyScreenState extends State<FamilyScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Add Family Member'),
+        title: const Text('Add Family Member',
+            style: TextStyle(color: AppColors.textPrimary)),
         content: TextField(
           controller: ctrl,
+          style: const TextStyle(color: AppColors.textPrimary),
           decoration: const InputDecoration(labelText: 'Name'),
           textCapitalization: TextCapitalization.words,
           autofocus: true,
@@ -115,7 +134,7 @@ class _FamilyScreenState extends State<FamilyScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(provider.error ?? 'Failed to add member'),
-          backgroundColor: Colors.red,
+          backgroundColor: AppColors.error,
         ),
       );
       provider.clearError();
@@ -138,72 +157,76 @@ class _MemberCardState extends State<_MemberCard> {
   Widget build(BuildContext context) {
     final m = widget.member;
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            // Avatar
-            _buildAvatar(m),
-            const SizedBox(width: 12),
-            // Info
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(m.name, style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 2),
-                  Row(
-                    children: [
-                      Icon(
-                        m.faceEnrolled ? Icons.face : Icons.face_outlined,
-                        size: 14,
-                        color: m.faceEnrolled ? Colors.green : Colors.grey,
+    return GlassCard(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          _buildAvatar(m),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(m.name,
+                    style: const TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Icon(
+                      m.faceEnrolled
+                          ? Icons.face_rounded
+                          : Icons.face_outlined,
+                      size: 14,
+                      color: m.faceEnrolled
+                          ? AppColors.success
+                          : AppColors.textMuted,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      m.faceEnrolled ? 'Face enrolled' : 'No face enrolled',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: m.faceEnrolled
+                            ? AppColors.success
+                            : AppColors.textMuted,
                       ),
-                      const SizedBox(width: 4),
-                      Text(
-                        m.faceEnrolled ? 'Face enrolled' : 'No face enrolled',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: m.faceEnrolled ? Colors.green : Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-            // Actions
-            if (_busy)
-              const SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            else
-              PopupMenuButton<String>(
-                onSelected: (action) => _handleAction(context, action),
-                itemBuilder: (_) => [
+          ),
+          if (_busy)
+            const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, color: AppColors.textMuted),
+              onSelected: (action) => _handleAction(context, action),
+              itemBuilder: (_) => [
+                const PopupMenuItem(
+                  value: 'enroll',
+                  child: Text('Enroll / Update Face'),
+                ),
+                if (widget.member.faceEnrolled)
                   const PopupMenuItem(
-                    value: 'enroll',
-                    child: Text('Enroll / Update Face'),
+                    value: 'unenroll',
+                    child: Text('Remove Face'),
                   ),
-                  if (widget.member.faceEnrolled)
-                    const PopupMenuItem(
-                      value: 'unenroll',
-                      child: Text('Remove Face'),
-                    ),
-                  const PopupMenuItem(
-                    value: 'delete',
-                    child: Text(
-                      'Delete Member',
-                      style: TextStyle(color: Colors.red),
-                    ),
-                  ),
-                ],
-              ),
-          ],
-        ),
+                PopupMenuItem(
+                  value: 'delete',
+                  child: Text('Delete Member',
+                      style: TextStyle(color: AppColors.error)),
+                ),
+              ],
+            ),
+        ],
       ),
     );
   }
@@ -211,20 +234,32 @@ class _MemberCardState extends State<_MemberCard> {
   Widget _buildAvatar(FamilyMember m) {
     if (m.photoUrl.isNotEmpty) {
       return ClipRRect(
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(22),
         child: CachedNetworkImage(
           imageUrl: m.photoUrl,
-          width: 48,
-          height: 48,
+          width: 44,
+          height: 44,
           fit: BoxFit.cover,
-          placeholder: (_, __) =>
-              const CircleAvatar(radius: 24, child: Icon(Icons.person)),
-          errorWidget: (_, __, ___) =>
-              const CircleAvatar(radius: 24, child: Icon(Icons.person)),
+          placeholder: (_, _) => _defaultAvatar(m),
+          errorWidget: (_, _, _) => _defaultAvatar(m),
         ),
       );
     }
-    return const CircleAvatar(radius: 24, child: Icon(Icons.person));
+    return _defaultAvatar(m);
+  }
+
+  Widget _defaultAvatar(FamilyMember m) {
+    return CircleAvatar(
+      radius: 22,
+      backgroundColor: AppColors.purpleSurface,
+      child: Text(
+        m.name.isNotEmpty ? m.name[0].toUpperCase() : '?',
+        style: const TextStyle(
+            color: AppColors.purple,
+            fontWeight: FontWeight.bold,
+            fontSize: 16),
+      ),
+    );
   }
 
   Future<void> _handleAction(BuildContext context, String action) async {
@@ -250,12 +285,12 @@ class _MemberCardState extends State<_MemberCard> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.camera_alt),
+              leading: const Icon(Icons.camera_alt_rounded),
               title: const Text('Take photo'),
               onTap: () => Navigator.pop(context, ImageSource.camera),
             ),
             ListTile(
-              leading: const Icon(Icons.photo_library),
+              leading: const Icon(Icons.photo_library_rounded),
               title: const Text('Choose from gallery'),
               onTap: () => Navigator.pop(context, ImageSource.gallery),
             ),
@@ -266,7 +301,7 @@ class _MemberCardState extends State<_MemberCard> {
 
     if (choice == null || !context.mounted) return;
 
-    final XFile? picked = await picker.pickImage(
+    final picked = await picker.pickImage(
       source: choice,
       imageQuality: 90,
       maxWidth: 1024,
@@ -275,9 +310,10 @@ class _MemberCardState extends State<_MemberCard> {
     if (picked == null || !context.mounted) return;
 
     setState(() => _busy = true);
+    // Capture provider before async gap.
+    final provider = context.read<FamilyProvider>();
     try {
       final bytes = await picked.readAsBytes();
-      final provider = context.read<FamilyProvider>();
       final errMsg = await provider.enrollFace(
         widget.member.id,
         bytes,
@@ -286,16 +322,15 @@ class _MemberCardState extends State<_MemberCard> {
       if (!context.mounted) return;
 
       if (errMsg != null) {
-        // Strip "Exception: " prefix for cleaner display
         final clean = errMsg.replaceFirst('Exception: ', '');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(clean), backgroundColor: Colors.red),
+          SnackBar(content: Text(clean), backgroundColor: AppColors.error),
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('${widget.member.name} enrolled successfully'),
-            backgroundColor: Colors.green,
+            backgroundColor: AppColors.success,
           ),
         );
       }
@@ -308,8 +343,10 @@ class _MemberCardState extends State<_MemberCard> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Remove Face Enrollment'),
-        content: Text('Remove face recognition for ${widget.member.name}?'),
+        title: const Text('Remove Face',
+            style: TextStyle(color: AppColors.textPrimary)),
+        content: Text('Remove face recognition for ${widget.member.name}?',
+            style: const TextStyle(color: AppColors.textSecondary)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -317,7 +354,7 @@ class _MemberCardState extends State<_MemberCard> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             child: const Text('Remove'),
           ),
         ],
@@ -327,15 +364,14 @@ class _MemberCardState extends State<_MemberCard> {
 
     setState(() => _busy = true);
     try {
-      final errMsg = await context.read<FamilyProvider>().unenrollFace(
-        widget.member.id,
-      );
+      final errMsg =
+          await context.read<FamilyProvider>().unenrollFace(widget.member.id);
       if (!context.mounted) return;
       if (errMsg != null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(errMsg.replaceFirst('Exception: ', '')),
-            backgroundColor: Colors.red,
+            backgroundColor: AppColors.error,
           ),
         );
       } else {
@@ -352,9 +388,11 @@ class _MemberCardState extends State<_MemberCard> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete Member'),
+        title: const Text('Delete Member',
+            style: TextStyle(color: AppColors.textPrimary)),
         content: Text(
           'Delete ${widget.member.name}? This will also remove their face enrollment.',
+          style: const TextStyle(color: AppColors.textSecondary),
         ),
         actions: [
           TextButton(
@@ -363,7 +401,7 @@ class _MemberCardState extends State<_MemberCard> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             child: const Text('Delete'),
           ),
         ],
@@ -372,20 +410,20 @@ class _MemberCardState extends State<_MemberCard> {
     if (confirmed != true || !context.mounted) return;
 
     setState(() => _busy = true);
+    // Capture provider before async gap.
+    final familyProvider = context.read<FamilyProvider>();
     try {
-      final ok = await context.read<FamilyProvider>().deleteMember(
-        widget.member.id,
-      );
+      final ok = await familyProvider.deleteMember(widget.member.id);
       if (!context.mounted) return;
       if (!ok) {
-        final err = context.read<FamilyProvider>().error ?? 'Delete failed';
+        final err = familyProvider.error ?? 'Delete failed';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(err.replaceFirst('Exception: ', '')),
-            backgroundColor: Colors.red,
+            backgroundColor: AppColors.error,
           ),
         );
-        context.read<FamilyProvider>().clearError();
+        familyProvider.clearError();
       }
     } finally {
       if (mounted) setState(() => _busy = false);

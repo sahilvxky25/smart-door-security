@@ -5,7 +5,7 @@ import '../models/signaling_message.dart';
 import '../services/signaling_service.dart';
 import '../services/webrtc_service.dart';
 
-enum CallState { idle, requesting, connecting, inCall, error }
+enum CallState { idle, ringing, requesting, connecting, inCall, error }
 
 class CallProvider extends ChangeNotifier {
   final WebRTCService _webrtc;
@@ -13,6 +13,7 @@ class CallProvider extends ChangeNotifier {
 
   CallState state = CallState.idle;
   String? errorMessage;
+  String? incomingImageUrl;
   RTCVideoRenderer? remoteRenderer;
 
   bool get isMuted => _webrtc.isMuted;
@@ -24,6 +25,7 @@ class CallProvider extends ChangeNotifier {
 
   StreamSubscription? _msgSub;
   StreamSubscription? _streamSub;
+  Timer? _requestTimer;
 
   CallProvider({
     required WebRTCService webrtc,
@@ -34,16 +36,55 @@ class CallProvider extends ChangeNotifier {
     _streamSub = _webrtc.remoteStream.listen(_handleRemoteStream);
   }
 
+  /// Called by SignalingProvider when an incoming_call message arrives.
+  /// Transitions to ringing state — the IncomingCallScreen reads this.
+  void onIncomingCall(String? imageUrl) {
+    incomingImageUrl = imageUrl;
+    state = CallState.ringing;
+    notifyListeners();
+  }
+
+  /// User accepted the incoming call → tell the backend to start WebRTC.
+  void acceptCall() {
+    state = CallState.requesting;
+    notifyListeners();
+    _signaling.send({'type': 'call_accepted'});
+    _requestTimer?.cancel();
+    _requestTimer = Timer(const Duration(seconds: 15), () {
+      state = CallState.error;
+      errorMessage =
+          'No response from door. Make sure the door device is online.';
+      notifyListeners();
+    });
+  }
+
+  /// User declined the incoming call.
+  void declineCall() {
+    _signaling.send({'type': 'call_declined'});
+    state = CallState.idle;
+    incomingImageUrl = null;
+    notifyListeners();
+  }
+
+  /// Manual call request (e.g. from a "Call Door" button).
   Future<void> startCall() async {
     state = CallState.requesting;
     notifyListeners();
     _webrtc.sendCallRequest();
+    _requestTimer?.cancel();
+    _requestTimer = Timer(const Duration(seconds: 15), () {
+      state = CallState.error;
+      errorMessage =
+          'No response from door. Make sure the door device is online.';
+      notifyListeners();
+    });
   }
 
   void _handleMessage(SignalingMessage msg) async {
     try {
       switch (msg.type) {
         case 'offer':
+          _requestTimer?.cancel();
           state = CallState.connecting;
           notifyListeners();
           await _initRenderer();
@@ -77,8 +118,10 @@ class CallProvider extends ChangeNotifier {
   }
 
   Future<void> hangup() async {
+    _requestTimer?.cancel();
     await _webrtc.hangup();
     state = CallState.idle;
+    incomingImageUrl = null;
     await _disposeRenderer();
     notifyListeners();
   }
@@ -96,6 +139,7 @@ class CallProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _requestTimer?.cancel();
     _msgSub?.cancel();
     _streamSub?.cancel();
     _disposeRenderer();

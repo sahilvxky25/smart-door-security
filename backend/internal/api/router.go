@@ -2,8 +2,10 @@ package api
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/api/middleware"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/controllers"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/models"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/repository"
@@ -19,17 +21,24 @@ import (
 	"gorm.io/gorm"
 )
 
+// DoorStateResponse is the response body for GET /door/state
+type DoorStateResponse struct {
+	ExpectedAngle int    `json:"expected_angle" example:"0"`
+	State         string `json:"state"          example:"LOCKED"`
+}
+
 func NewRouter(
 	db *gorm.DB,
 	auth *services.AuthService,
 	door *services.DoorService,
 	camera *services.CameraService,
-	intrusion *services.IntrusionService,
+	vibration *services.VibrationService,
 	notify *services.NotificationService,
 	face *services.FaceService,
 	eventService *services.EventService,
 	signalingHub *webrtc.Hub,
 	mediaStore *storage.MediaStorage,
+	jwtSecret string,
 ) *gin.Engine {
 
 	r := gin.Default()
@@ -42,37 +51,102 @@ func NewRouter(
 	// Authentication
 	r.POST("/auth/signup", signUpHandler(auth))
 	r.POST("/auth/signin", signInHandler(auth))
+	r.POST("/auth/signout", signOutHandler())
 
-	r.POST("/door/unlock", unlockDoorManual(door, eventService))
-	r.POST("/door/lock", lockDoor(door))
+	// Protected Routes
+	authGroup := r.Group("/")
+	authGroup.Use(middleware.RequireAuth(jwtSecret))
 
-	r.GET("/users", showUsersHandler(db))
-	r.POST("/users", createUserHandler(db))
+	// Door control
+	authGroup.POST("/door/unlock", unlockDoorManual(door, eventService))
+	authGroup.POST("/door/lock", lockDoor(door, eventService))
+	authGroup.GET("/door/state", getDoorState(door))
 
-	r.GET("/events", listEventsHandler(eventService))
-	r.GET("/events/:id", getEventHandler(eventService))
+	authGroup.GET("/users", showUsersHandler(db))
+	authGroup.POST("/users", createUserHandler(db))
+
+	authGroup.GET("/events", listEventsHandler(eventService))
+	authGroup.GET("/events/:id", getEventHandler(eventService))
 
 	// Family member management + face enrollment
 	familyRepo := repository.NewFamilyRepo(db)
 	fc := controllers.NewFamilyController(familyRepo, face, mediaStore)
-	r.GET("/family", fc.ListMembers)
-	r.POST("/family", fc.CreateMember)
-	r.GET("/family/:id", fc.GetMember)
-	r.PUT("/family/:id", fc.UpdateMember)
-	r.DELETE("/family/:id", fc.DeleteMember)
-	r.POST("/family/:id/enroll", fc.EnrollFace)
-	r.DELETE("/family/:id/enroll", fc.UnenrollFace)
+	authGroup.GET("/family", fc.ListMembers)
+	authGroup.POST("/family", fc.CreateMember)
+	authGroup.GET("/family/:id", fc.GetMember)
+	authGroup.PUT("/family/:id", fc.UpdateMember)
+	authGroup.DELETE("/family/:id", fc.DeleteMember)
+	authGroup.POST("/family/:id/enroll", fc.EnrollFace)
+	authGroup.DELETE("/family/:id/enroll", fc.UnenrollFace)
 
-	// Image proxy — fetches objects from MinIO and streams them to clients
-	r.GET("/images/*path", imageProxyHandler(mediaStore))
+	// Profile photo upload
+	authGroup.POST("/profile/photo", uploadProfilePhotoHandler(db, mediaStore, face))
 
 	// WebRTC signaling WebSocket
 	r.GET("/ws/signaling", signalingHub.HandleWebSocket)
 
-	// Static web files (door.html, owner.html)
-	r.Static("/web", "./web")
-
 	return r
+}
+
+// uploadProfilePhotoHandler handles POST /profile/photo (multipart).
+// Saves the uploaded image to Cloudinary and stores the URL in the user record.
+func uploadProfilePhotoHandler(db *gorm.DB, store *storage.MediaStorage, faceService *services.FaceService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Get user name
+		name := c.Query("name")
+		if name == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "name query param required"})
+			return
+		}
+
+		file, header, err := c.Request.FormFile("photo")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "photo field required"})
+			return
+		}
+		defer file.Close()
+
+		// Read & upload to Cloudinary
+		data, err := io.ReadAll(file)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+			return
+		}
+
+		contentType := header.Header.Get("Content-Type")
+		if contentType == "" {
+			contentType = "image/jpeg"
+		}
+		objectName := fmt.Sprintf("profiles/%s_%s", name, header.Filename)
+		url, err := store.UploadImage(c.Request.Context(), objectName, data, contentType)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed"})
+			return
+		}
+
+		var user models.User
+		if err := db.Where("name = ?", name).First(&user).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+
+		// Enroll face in the recognition model as user_id_name
+		faceName := fmt.Sprintf("%d_%s", user.ID, user.Name)
+		if err := faceService.EnrollFace(faceName, data); err != nil {
+			// Enrollment failed — clean up the uploaded photo
+			_ = store.DeleteObject(c.Request.Context(), objectName)
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+			return
+		}
+
+		user.PhotoURL = url
+		db.Save(&user)
+
+		c.JSON(http.StatusOK, gin.H{
+			"photo_url": url,
+			"user":      user,
+		})
+	}
 }
 
 // healthCheck godoc
@@ -88,30 +162,58 @@ func healthCheck(c *gin.Context) {
 
 // unlockDoorManual godoc
 // @Summary Unlock door (manual)
-// @Description Sends an MQTT command to unlock the door servo and logs a MANUAL_UNLOCK event
+// @Description Sends an MQTT UNLOCK command to the servo and auto-locks after 5 s. Logs a MANUAL_UNLOCK event.
 // @Tags door
 // @Produce json
+// @Security BearerAuth
 // @Success 200 {object} map[string]string
+// @Failure 401 {object} map[string]string
 // @Router /door/unlock [post]
 func unlockDoorManual(door *services.DoorService, events *services.EventService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		door.UnlockDoor()
-		events.LogEvent(models.EventManualUnlock, nil, "")
-		c.JSON(200, gin.H{"status": "door opened"})
+		events.LogEvent(models.EventManualUnlock, "")
+		c.JSON(200, gin.H{"status": "door unlocked"})
 	}
 }
 
 // lockDoor godoc
 // @Summary Lock door
-// @Description Sends an MQTT command to lock the door servo
+// @Description Sends an MQTT LOCK command to the servo. Logs a MANUAL_LOCK event.
 // @Tags door
 // @Produce json
+// @Security BearerAuth
 // @Success 200 {object} map[string]string
+// @Failure 401 {object} map[string]string
 // @Router /door/lock [post]
-func lockDoor(door *services.DoorService) gin.HandlerFunc {
+func lockDoor(door *services.DoorService, events *services.EventService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		door.LockDoor()
+		events.LogEvent(models.EventManualLock, "")
 		c.JSON(200, gin.H{"status": "door locked"})
+	}
+}
+
+// getDoorState godoc
+// @Summary Get current door lock state
+// @Description Returns the servo angle and lock state last commanded by the backend (LOCKED / UNLOCKED).
+// @Tags door
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} DoorStateResponse
+// @Failure 401 {object} map[string]string
+// @Router /door/state [get]
+func getDoorState(door *services.DoorService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		angle := door.ExpectedAngle()
+		state := "LOCKED"
+		if angle != 0 {
+			state = "UNLOCKED"
+		}
+		c.JSON(200, DoorStateResponse{
+			ExpectedAngle: angle,
+			State:         state,
+		})
 	}
 }
 
@@ -198,7 +300,8 @@ func createUserHandler(db *gorm.DB) gin.HandlerFunc {
 // @Router /events [get]
 func listEventsHandler(events *services.EventService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		eventList, err := events.ListEvents(100, 0)
+		userID := c.MustGet("user_id").(uint)
+		eventList, err := events.ListEvents(userID, 100, 0)
 		if err != nil {
 			c.JSON(500, gin.H{"error": "failed to fetch events"})
 			return
@@ -239,6 +342,21 @@ type SignUpRequest struct {
 	Name     string `json:"name"  binding:"required"`
 	Email    string `json:"email" binding:"required,email"`
 	Password string `json:"password" binding:"required,min=6"`
+}
+
+// signOutHandler godoc
+// @Summary Sign out
+// @Description Invalidates the client session. Because JWTs are stateless, the
+// client must delete the stored token. The server acknowledges with 200 OK.
+// @Tags auth
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]string
+// @Router /auth/signout [post]
+func signOutHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "signed out"})
+	}
 }
 
 // signUpHandler godoc
@@ -300,26 +418,4 @@ func signInHandler(auth *services.AuthService) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{"token": token, "user": user})
 	}
 }
-
-func imageProxyHandler(media *storage.MediaStorage) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// path param includes leading slash, e.g. "/snapshot_123.jpg"
-		objectName := c.Param("path")
-		if len(objectName) > 0 && objectName[0] == '/' {
-			objectName = objectName[1:]
-		}
-		if objectName == "" {
-			c.Status(http.StatusBadRequest)
-			return
-		}
-
-		obj, contentType, err := media.GetObject(c.Request.Context(), objectName)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "image not found"})
-			return
-		}
-		defer obj.Close()
-
-		c.DataFromReader(http.StatusOK, -1, contentType, obj, nil)
-	}
-}
+

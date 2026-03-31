@@ -6,6 +6,7 @@ import re
 import time
 import threading
 import traceback
+import requests as http_requests
 import base64
 import pickle
 import torch
@@ -229,6 +230,46 @@ def recognize():
 
     match, user = recognize_face(frame)
     return jsonify({"match": match, "user": user})
+
+
+@app.route("/recognize-url", methods=["POST"])
+def recognize_url():
+    """Recognize a face from an image URL (e.g. Cloudinary).
+
+    Accepts JSON: {"url": "https://res.cloudinary.com/..."}
+    Downloads the image and runs face recognition (no anti-spoof).
+    """
+    try:
+        data = request.get_json(silent=True)
+        if not data:
+            return jsonify({"error": "request body must be JSON"}), 400
+
+        url = (data.get("url") or "").strip()
+        if not url:
+            return jsonify({"error": "url is required"}), 400
+
+        # Download image from URL
+        try:
+            resp = http_requests.get(url, timeout=10)
+            resp.raise_for_status()
+        except Exception as e:
+            return jsonify({"error": f"failed to download image from URL: {str(e)}"}), 400
+
+        image_bytes = resp.content
+        if not image_bytes:
+            return jsonify({"error": "downloaded image is empty"}), 400
+
+        npimg = np.frombuffer(image_bytes, np.uint8)
+        frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+        if frame is None:
+            return jsonify({"error": "could not decode downloaded image"}), 400
+
+        match, user = recognize_face(frame)
+        return jsonify({"match": match, "user": user})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"internal error: {str(e)}"}), 500
 
 
 @app.route("/capture-and-recognize", methods=["POST"])
