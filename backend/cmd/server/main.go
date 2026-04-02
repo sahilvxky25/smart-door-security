@@ -14,6 +14,7 @@ import (
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/models"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/mqtt"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/services"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/calls"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/storage"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/webrtc"
 	// "github.com/gottatouchsomegrass/smart-door-backend/internal/controllers"
@@ -53,8 +54,10 @@ func main() {
 		log.Fatal("Cloudinary connection failed:", err)
 	}
 
-	// Initialize WebRTC signaling hub
-	signalingHub := webrtc.NewHub()
+	// Initialize WebRTC signaling hub (requires CallManager injected)
+	callManager := calls.NewCallManager(nil, 30*time.Second) // Hub injected below
+	signalingHub := webrtc.NewHub(callManager)
+	callManager.SetHub(signalingHub) // Add a SetHub method to break chicken-egg dependency
 	go signalingHub.Run()
 
 	// Start in-process door WebRTC peer (replaces browser-based door.html)
@@ -62,7 +65,8 @@ func main() {
 	doorPeer := webrtc.NewDoorPeer(doorRecv, doorSendFn, nil)
 	go doorPeer.Run()
 
-	// Initialize services (notificationService first — all sensor services depend on it)
+	// (Services initialization continued...)
+	
 	eventService        := services.NewEventService(db)
 	eventService.OnEventCreated = func(event *models.Event) {
 		signalingHub.BroadcastEventUpdate(event.EventType)
@@ -72,7 +76,7 @@ func main() {
 	doorService         := services.NewDoorService(mqttClient, eventService)
 	faceService         := services.NewFaceService(cfg.FACE_SERVICE_URL)
 	soundService        := services.NewSoundService()
-	notificationService := services.NewNotificationService(signalingHub)
+	notificationService := services.NewNotificationService(signalingHub, callManager, db)
 	vibrationService    := services.NewVibrationService(db, eventService, soundService, notificationService, doorService)
 	cameraService       := services.NewCameraService(faceService, doorService, eventService, mediaStore, mqttClient, db, notificationService, soundService)
 	cameraService.SetCallActiveCheckFn(doorPeer.IsCallActive)

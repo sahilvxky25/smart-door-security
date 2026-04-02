@@ -144,10 +144,11 @@ class _SignInFormState extends State<_SignInForm> {
     if (!mounted) return;
     setState(() => _submitting = false);
     if (ok) {
-      // Connect WebSocket immediately after login
+      // Connect WebSocket and init FCM immediately after login
       final signaling = context.read<SignalingProvider>();
       final config = context.read<AppConfig>();
       signaling.connect(config.wsUrl, userId: auth.user?.id);
+      signaling.initializeFCM(api);
     } else if (auth.error != null) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(auth.error!)));
@@ -245,10 +246,11 @@ class _SignUpFormState extends State<_SignUpForm> {
     if (!mounted) return;
     setState(() => _submitting = false);
     if (ok) {
-      // Connect WebSocket immediately after registration
+      // Connect WebSocket and init FCM immediately after registration
       final signaling = context.read<SignalingProvider>();
       final config = context.read<AppConfig>();
       signaling.connect(config.wsUrl, userId: auth.user?.id);
+      signaling.initializeFCM(api);
     } else if (auth.error != null) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(auth.error!)));

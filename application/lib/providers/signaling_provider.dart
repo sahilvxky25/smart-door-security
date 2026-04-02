@@ -6,10 +6,14 @@ import '../models/signaling_message.dart';
 import '../providers/call_provider.dart';
 import '../providers/event_provider.dart';
 import '../providers/door_provider.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:flutter_callkit_incoming/entities/call_event.dart' as ck;
+import '../services/fcm_service.dart';
+import '../services/api_service.dart';
 import '../services/signaling_service.dart';
+import '../services/callkit_service.dart';
 
 // Notification IDs – one slot per alert category.
-const _kNotifIdIncomingCall = 1;
 const _kNotifIdSpoof = 2;
 
 class SignalingProvider extends ChangeNotifier {
@@ -46,6 +50,34 @@ class SignalingProvider extends ChangeNotifier {
     AwesomeNotifications().setListeners(
       onActionReceivedMethod: _onActionReceivedMethod,
     );
+
+    // Listen for CallKit events
+    FlutterCallkitIncoming.onEvent.listen(_onCallKitEvent);
+  }
+
+  void initializeFCM(ApiService api) {
+    FCMService().initialize(api);
+  }
+
+  void dismissIncomingCall(String? callId) {
+    if (callId != null) {
+      CallKitService().endCall(callId);
+    }
+  }
+
+  void _onCallKitEvent(ck.CallEvent? event) {
+    if (event == null) return;
+    switch (event.event) {
+      case ck.Event.actionCallAccept:
+        _callProvider.acceptCall();
+        _navigatorKey.currentState?.pushNamed('/call');
+        break;
+      case ck.Event.actionCallDecline:
+        _callProvider.declineCall();
+        break;
+      default:
+        break;
+    }
   }
 
   static Future<void> _onActionReceivedMethod(ReceivedAction receivedAction) async {
@@ -62,19 +94,29 @@ class SignalingProvider extends ChangeNotifier {
       latestNotification = msg;
       notifyListeners();
 
-      // Trigger the "Ringing" state
-      _callProvider.onIncomingCall(msg.imageUrl);
+      // Trigger the "Ringing" state in Provider
+      _callProvider.onIncomingCall(msg.imageUrl, msg.callId);
 
-      // Show high-priority "Awesome Notification"
-      _showIncomingCallNotification(msg);
-
-      // In-app navigation to call UI
-      _navigatorKey.currentState?.pushNamed(
-        '/incoming_call',
-        arguments: msg.imageUrl,
-      );
+      // Show native CallKit UI
+      if (msg.callId != null) {
+        CallKitService().showIncomingCall(
+          callId: msg.callId!,
+          imageUrl: msg.imageUrl,
+          title: msg.title,
+          body: msg.body,
+        );
+      }
 
       latestNotification = null;
+      return;
+    }
+
+    // Call timed out or cancelled by backend
+    if (msg.type == 'missed_call') {
+      _callProvider.declineCall(); // reset State
+      if (msg.callId != null) {
+        CallKitService().endCall(msg.callId!);
+      }
       return;
     }
 
@@ -93,36 +135,6 @@ class SignalingProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> _showIncomingCallNotification(SignalingMessage msg) async {
-    await AwesomeNotifications().createNotification(
-      content: NotificationContent(
-        id: _kNotifIdIncomingCall,
-        channelKey: 'call_channel',
-        title: 'Incoming Video Call',
-        body: 'Someone is at your door. Tap to answer.',
-        bigPicture: msg.imageUrl,
-        notificationLayout: NotificationLayout.BigPicture,
-        fullScreenIntent: true,
-        wakeUpScreen: true,
-        category: NotificationCategory.Call,
-        autoDismissible: false,
-      ),
-      actionButtons: [
-        NotificationActionButton(
-          key: 'ACCEPT',
-          label: 'Accept',
-          color: Colors.green,
-          actionType: ActionType.Default,
-        ),
-        NotificationActionButton(
-          key: 'DECLINE',
-          label: 'Decline',
-          color: Colors.red,
-          actionType: ActionType.DismissAction,
-        ),
-      ],
-    );
-  }
 
   Future<void> _showAlertNotification(SignalingMessage msg) async {
     await AwesomeNotifications().createNotification(

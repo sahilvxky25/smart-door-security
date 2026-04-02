@@ -51,7 +51,7 @@ func (v *VibrationService) HandleVibration() {
 
 	v.soundService.PlaySOS()
 	v.eventService.LogEvent(models.EventForcedEntry, "")
-	v.notify.Notify(models.EventForcedEntry, "")
+	v.notify.TriggerIncomingCall(models.EventForcedEntry, "")
 
-	log.Printf("[VibrationService] SOS alert played and event logged at %s", time.Now().Format(time.RFC3339))
+	log.Printf("[VibrationService] SOS alert and video call triggered at %s", time.Now().Format(time.RFC3339))
 }

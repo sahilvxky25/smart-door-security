@@ -61,7 +61,7 @@ func (m *MagneticService) HandleDoorOpen() {
 		log.Println("[MagneticService] ⚠ FORCED ENTRY DETECTED: Door opened without recent authentication!")
 		m.soundService.PlaySOS()
 		m.eventService.LogEvent(models.EventForcedEntry, "")
-		m.notify.Notify(models.EventForcedEntry, "")
+		m.notify.TriggerIncomingCall(models.EventForcedEntry, "")
 	} else {
 		log.Println("[MagneticService] Door opened (authorized via recent auth window)")
 		m.eventService.LogEvent(models.EventDoorOpened, "")

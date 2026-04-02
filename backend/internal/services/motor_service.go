@@ -25,7 +25,7 @@ type MotorService struct {
 
 const (
 	motorAngleTolerance = 5            // degrees of acceptable deviation
-	motorDebounce       = 10 * time.Second // avoid repeated alerts
+	// motorDebounce       = 10 * time.Second // avoid repeated alerts
 )
 
 func NewMotorService(

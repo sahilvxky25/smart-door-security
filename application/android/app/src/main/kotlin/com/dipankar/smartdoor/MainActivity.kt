@@ -1,4 +1,4 @@
-package com.example.application
+package com.dipankar.smartdoor
 
 import io.flutter.embedding.android.FlutterActivity
 

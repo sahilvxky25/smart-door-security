@@ -46,6 +46,13 @@ definitions:
     - name
     - password
     type: object
+  api.UpdateFCMTokenRequest:
+    properties:
+      token:
+        type: string
+    required:
+    - token
+    type: object
 host: localhost:8080
 info:
   contact: {}
@@ -460,6 +467,45 @@ paths:
               type: string
             type: object
       summary: Create a new user
+      tags:
+      - users
+  /users/fcm-token:
+    post:
+      consumes:
+      - application/json
+      description: Updates the Firebase Cloud Messaging token for the authenticated
+        user
+      parameters:
+      - description: FCM Token
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.UpdateFCMTokenRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Update FCM Token
       tags:
       - users
 securityDefinitions:

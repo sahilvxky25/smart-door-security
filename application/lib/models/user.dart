@@ -3,6 +3,7 @@ class User {
   final String name;
   final String email;
   final String? photoUrl;
+  final String? fcmToken;
   final DateTime createdAt;
 
   User({
@@ -10,6 +11,7 @@ class User {
     required this.name,
     required this.email,
     this.photoUrl,
+    this.fcmToken,
     required this.createdAt,
   });
 
@@ -19,6 +21,7 @@ class User {
       name: json['name'] as String,
       email: json['email'] as String,
       photoUrl: json['photo_url'] as String?,
+      fcmToken: json['fcm_token'] as String?,
       createdAt: DateTime.parse(json['created_at'] as String),
     );
   }

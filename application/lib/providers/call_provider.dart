@@ -14,6 +14,7 @@ class CallProvider extends ChangeNotifier {
   CallState state = CallState.idle;
   String? errorMessage;
   String? incomingImageUrl;
+  String? activeCallId;
   RTCVideoRenderer? remoteRenderer;
 
   bool get isMuted => _webrtc.isMuted;
@@ -38,8 +39,9 @@ class CallProvider extends ChangeNotifier {
 
   /// Called by SignalingProvider when an incoming_call message arrives.
   /// Transitions to ringing state — the IncomingCallScreen reads this.
-  void onIncomingCall(String? imageUrl) {
+  void onIncomingCall(String? imageUrl, String? callId) {
     incomingImageUrl = imageUrl;
+    activeCallId = callId;
     state = CallState.ringing;
     notifyListeners();
   }
@@ -48,7 +50,10 @@ class CallProvider extends ChangeNotifier {
   void acceptCall() {
     state = CallState.requesting;
     notifyListeners();
-    _signaling.send({'type': 'call_accepted'});
+    _signaling.send({
+      'type': 'call_accepted',
+      'call_id': activeCallId,
+    });
     _requestTimer?.cancel();
     _requestTimer = Timer(const Duration(seconds: 15), () {
       state = CallState.error;
@@ -60,9 +65,15 @@ class CallProvider extends ChangeNotifier {
 
   /// User declined the incoming call.
   void declineCall() {
-    _signaling.send({'type': 'call_declined'});
+    if (activeCallId != null) {
+      _signaling.send({
+        'type': 'call_declined',
+        'call_id': activeCallId,
+      });
+    }
     state = CallState.idle;
     incomingImageUrl = null;
+    activeCallId = null;
     notifyListeners();
   }
 
@@ -98,6 +109,8 @@ class CallProvider extends ChangeNotifier {
         case 'hangup':
           await _webrtc.onRemoteHangup();
           state = CallState.idle;
+          incomingImageUrl = null;
+          activeCallId = null;
           await _disposeRenderer();
           notifyListeners();
           break;
@@ -119,9 +132,16 @@ class CallProvider extends ChangeNotifier {
 
   Future<void> hangup() async {
     _requestTimer?.cancel();
+    if (activeCallId != null) {
+      _signaling.send({
+        'type': 'hangup',
+        'call_id': activeCallId,
+      });
+    }
     await _webrtc.hangup();
     state = CallState.idle;
     incomingImageUrl = null;
+    activeCallId = null;
     await _disposeRenderer();
     notifyListeners();
   }

@@ -227,4 +227,15 @@ class ApiService {
     final body = jsonDecode(resp.body);
     return body['photo_url'] as String;
   }
+
+  Future<void> updateFCMToken(String token) async {
+    final resp = await http.post(
+      Uri.parse('$baseUrl/users/fcm-token'),
+      headers: {'Content-Type': 'application/json', ..._authHeaders},
+      body: jsonEncode({'token': token}),
+    );
+    if (resp.statusCode != 200) {
+      throw Exception('Failed to update FCM token');
+    }
+  }
 }

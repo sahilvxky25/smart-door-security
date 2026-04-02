@@ -1,8 +1,8 @@
-import 'package:flutter/material.dart';
-import 'package:awesome_notifications/awesome_notifications.dart';
-import 'package:provider/provider.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'config/app_config.dart';
 import 'config/app_theme.dart';
+import 'services/fcm_service.dart';
 import 'models/event.dart';
 import 'providers/auth_provider.dart';
 import 'providers/call_provider.dart';
@@ -15,16 +15,26 @@ import 'screens/event_detail_screen.dart';
 import 'screens/events_screen.dart';
 import 'screens/family_screen.dart';
 import 'screens/home_screen.dart';
-import 'screens/incoming_call_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/api_service.dart';
 import 'services/signaling_service.dart';
 import 'services/webrtc_service.dart';
+import 'package:awesome_notifications/awesome_notifications.dart';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
+  await FCMService.handleBackgroundMessage(message);
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
   // Load config from SharedPreferences
   final config = await AppConfig.load();
@@ -121,6 +131,7 @@ class MyApp extends StatelessWidget {
             await auth.loadFromStorage(apiService);
             if (auth.isAuthenticated) {
               signaling.connect(config.wsUrl, userId: auth.user?.id);
+              signaling.initializeFCM(apiService);
             }
           });
 
@@ -159,11 +170,6 @@ class MyApp extends StatelessWidget {
         final event = settings.arguments as Event;
         return MaterialPageRoute(
           builder: (_) => EventDetailScreen(event: event),
-        );
-      case '/incoming_call':
-        final imageUrl = settings.arguments as String?;
-        return MaterialPageRoute(
-          builder: (_) => IncomingCallScreen(imageUrl: imageUrl),
         );
       case '/call':
         return MaterialPageRoute(builder: (_) => const CallScreen());

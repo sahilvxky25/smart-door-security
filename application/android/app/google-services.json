@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "466515825598",
+    "project_id": "smart-door-security-3ce1b",
+    "storage_bucket": "smart-door-security-3ce1b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:466515825598:android:8121a27cae82d5b891dfef",
+        "android_client_info": {
+          "package_name": "com.dipankar.smartdoor"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAk6AiIbJDeYHxb6UlGShAC80u5OB1EQgA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

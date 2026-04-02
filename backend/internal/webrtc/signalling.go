@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/calls"
 )
 
 var upgrader = websocket.Upgrader{
@@ -37,13 +38,15 @@ type Hub struct {
 	unregister    chan *Client
 	localDoorRecv chan []byte // in-process door peer reads from this channel
 	activeOwnerID *uint       // user ID of the currently connected owner
+	callManager   *calls.CallManager
 }
 
-func NewHub() *Hub {
+func NewHub(cm *calls.CallManager) *Hub {
 	return &Hub{
-		clients:    make(map[*Client]bool),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
+		clients:     make(map[*Client]bool),
+		register:    make(chan *Client),
+		unregister:  make(chan *Client),
+		callManager: cm,
 	}
 }
 
@@ -151,9 +154,10 @@ func (h *Hub) BroadcastAlert(eventType, title, body, imageURL string) {
 
 // BroadcastIncomingCall sends an incoming_call notification to all owner clients.
 // This triggers the accept/decline UI on the Flutter app.
-func (h *Hub) BroadcastIncomingCall(imageURL string) {
+func (h *Hub) BroadcastIncomingCall(callID, imageURL string) {
 	msg := map[string]string{
 		"type":      "incoming_call",
+		"call_id":   callID,
 		"image_url": imageURL,
 		"timestamp": time.Now().Format(time.RFC3339),
 	}
@@ -163,7 +167,23 @@ func (h *Hub) BroadcastIncomingCall(imageURL string) {
 		return
 	}
 	h.broadcast(data, "owner")
-	log.Printf("[SignalingHub] Sent incoming_call to owner clients")
+	log.Printf("[SignalingHub] Sent incoming_call to owner clients for call %s", callID)
+}
+
+// BroadcastMissedCall notifies owner clients that a call has timed out without being answered.
+func (h *Hub) BroadcastMissedCall(callID string) {
+	msg := map[string]string{
+		"type":      "missed_call",
+		"call_id":   callID,
+		"timestamp": time.Now().Format(time.RFC3339),
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("[SignalingHub] Failed to marshal missed call: %v", err)
+		return
+	}
+	h.broadcast(data, "owner")
+	log.Printf("[SignalingHub] Sent missed_call to owner clients for call %s", callID)
 }
 
 // BroadcastEventUpdate notifies all connected owner clients that a new event
@@ -247,6 +267,26 @@ func (c *Client) readPump() {
 				log.Printf("[SignalingHub] Read error from %s: %v", c.role, err)
 			}
 			break
+		}
+
+		// If it's a signaling message, try to update CallManager state
+		var parsed map[string]interface{}
+		if err := json.Unmarshal(message, &parsed); err == nil {
+			msgType, _ := parsed["type"].(string)
+			callID, _ := parsed["call_id"].(string)
+			
+			if callID != "" {
+				if msgType == "call_accepted" {
+					c.hub.callManager.AcceptCall(callID)
+					log.Printf("[SignalingHub] Call %s accepted by owner, relayed to door", callID)
+				} else if msgType == "call_declined" {
+					c.hub.callManager.DeclineCall(callID)
+					log.Printf("[SignalingHub] Call %s declined by owner, relayed to door", callID)
+				} else if msgType == "hangup" {
+					c.hub.callManager.EndCall(callID)
+					log.Printf("[SignalingHub] Call %s ended by owner, relayed to door", callID)
+				}
+			}
 		}
 
 		// Relay to opposite role

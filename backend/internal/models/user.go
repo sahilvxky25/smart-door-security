@@ -8,5 +8,6 @@ type User struct {
 	Email        string    `gorm:"unique" json:"email"`
 	PhotoURL     string    `json:"photo_url"`
 	PasswordHash string    `json:"-"`
+	FCMToken     string    `json:"fcm_token"`
 	CreatedAt    time.Time `json:"created_at"`
 }

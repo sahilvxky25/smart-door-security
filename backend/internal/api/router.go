@@ -64,6 +64,7 @@ func NewRouter(
 
 	authGroup.GET("/users", showUsersHandler(db))
 	authGroup.POST("/users", createUserHandler(db))
+	authGroup.POST("/users/fcm-token", updateFCMTokenHandler(db))
 
 	authGroup.GET("/events", listEventsHandler(eventService))
 	authGroup.GET("/events/:id", getEventHandler(eventService))
@@ -287,6 +288,42 @@ func createUserHandler(db *gorm.DB) gin.HandlerFunc {
 			"message": "user created",
 			"user":    user,
 		})
+	}
+}
+
+// UpdateFCMTokenRequest represents the request body for updating the FCM token
+type UpdateFCMTokenRequest struct {
+	Token string `json:"token" binding:"required"`
+}
+
+// updateFCMTokenHandler godoc
+// @Summary Update FCM Token
+// @Description Updates the Firebase Cloud Messaging token for the authenticated user
+// @Tags users
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body UpdateFCMTokenRequest true "FCM Token"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /users/fcm-token [post]
+func updateFCMTokenHandler(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID := c.MustGet("user_id").(uint)
+
+		var req UpdateFCMTokenRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request format"})
+			return
+		}
+
+		if err := db.Model(&models.User{}).Where("id = ?", userID).Update("fcm_token", req.Token).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save fcm token"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "fcm token updated successfully"})
 	}
 }
 
