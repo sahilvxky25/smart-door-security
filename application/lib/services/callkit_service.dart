@@ -32,8 +32,9 @@ class CallKitService {
       headers: <String, dynamic>{'apiKey': 'Abc@123', 'platform': 'flutter'},
       android: AndroidParams(
         isCustomNotification: true,
+        isShowCallID: true,
         isShowLogo: false,
-        ringtonePath: 'system_ringtone_default',
+        ringtonePath: 'makabhosda_aag',
         backgroundColor: '#09121C',
         backgroundUrl: 'https://dummyimage.com/1x1/000000/000000.png',
         actionColor: '#4CAF50',

@@ -5,10 +5,11 @@ import (
 	"log"
 	"time"
 
+	"os"
+
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/messaging"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/calls"
-	"os"
 
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/models"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/webrtc"
@@ -32,7 +33,7 @@ func NewNotificationService(hub *webrtc.Hub, cm *calls.CallManager, db *gorm.DB)
 	}
 	opt := option.WithCredentialsFile(creds)
 	app, err := firebase.NewApp(context.Background(), nil, opt)
-	
+
 	var fcmClient *messaging.Client
 	if err == nil {
 		fcmClient, err = app.Messaging(context.Background())
@@ -92,9 +93,9 @@ func (n *NotificationService) Notify(eventType, imageURL string) {
 
 // TriggerIncomingCall sends an incoming_call WebSocket message to all owner
 // clients. This triggers the high-priority "Awesome Notification" call UI.
-func (n *NotificationService) TriggerIncomingCall(eventType, imageURL string) {
+func (n *NotificationService) TriggerIncomingCall(eventType, imageURL string) string {
 	log.Printf("[NotificationService] Security event – triggering incoming call at %s", time.Now().Format(time.RFC3339))
-	
+
 	// Create a new call session which starts the ringing timeout machine
 	callID := n.callManager.CreateCallSession(eventType, imageURL)
 
@@ -132,6 +133,20 @@ func (n *NotificationService) TriggerIncomingCall(eventType, imageURL string) {
 			}
 		}
 	}
+
+	return callID
+}
+
+func (n *NotificationService) GetCallStatus(callID string) (calls.CallStatus, bool) {
+	call, ok := n.callManager.GetCall(callID)
+	if !ok {
+		return "", false
+	}
+	return call.Status, true
+}
+
+func (n *NotificationService) HasActiveCallForEventType(eventType string) bool {
+	return n.callManager.HasLiveCallOfType(eventType)
 }
 
 // alertText returns a human-readable title and body for each event type.
@@ -140,7 +155,7 @@ func alertText(eventType string) (title, body string) {
 	case models.EventForcedEntry:
 		return "Forced Entry Detected!", "Someone is attempting to break into your home."
 	case models.EventSpoofAttempt:
-		return "Spoof Attempt Blocked", "A spoofed face was detected at the door."
+		return "Spoof Attempt Detected", "A spoofed face was detected at the door."
 	case models.EventHandleTamper:
 		return "Handle Tamper Alert", "The door handle is being tampered with."
 	case models.EventDoorLeftOpen:

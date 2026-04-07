@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
+// import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:awesome_notifications/awesome_notifications.dart';
 import '../models/signaling_message.dart';
@@ -14,7 +14,7 @@ import '../services/signaling_service.dart';
 import '../services/callkit_service.dart';
 
 // Notification IDs – one slot per alert category.
-const _kNotifIdSpoof = 2;
+// const _kNotifIdSpoof = 2;
 
 class SignalingProvider extends ChangeNotifier {
   final SignalingService _service;
@@ -73,14 +73,22 @@ class SignalingProvider extends ChangeNotifier {
         _navigatorKey.currentState?.pushNamed('/call');
         break;
       case ck.Event.actionCallDecline:
-        _callProvider.declineCall();
+        unawaited(_callProvider.declineCall());
+        break;
+      case ck.Event.actionCallEnded:
+        unawaited(_callProvider.endFromNativeUi());
+        break;
+      case ck.Event.actionCallTimeout:
+        unawaited(_callProvider.resetCallState());
         break;
       default:
         break;
     }
   }
 
-  static Future<void> _onActionReceivedMethod(ReceivedAction receivedAction) async {
+  static Future<void> _onActionReceivedMethod(
+    ReceivedAction receivedAction,
+  ) async {
     if (receivedAction.buttonKeyPressed == 'ACCEPT') {
       // If user accepts, they are already navigating to /incoming_call by the tap action
     } else if (receivedAction.buttonKeyPressed == 'DECLINE') {
@@ -113,10 +121,7 @@ class SignalingProvider extends ChangeNotifier {
 
     // Call timed out or cancelled by backend
     if (msg.type == 'missed_call') {
-      _callProvider.declineCall(); // reset State
-      if (msg.callId != null) {
-        CallKitService().endCall(msg.callId!);
-      }
+      unawaited(_callProvider.resetCallState(endNativeCallUi: true));
       return;
     }
 
@@ -135,7 +140,6 @@ class SignalingProvider extends ChangeNotifier {
     }
   }
 
-
   Future<void> _showAlertNotification(SignalingMessage msg) async {
     await AwesomeNotifications().createNotification(
       content: NotificationContent(
@@ -152,6 +156,7 @@ class SignalingProvider extends ChangeNotifier {
     final url = userId != null ? '$wsUrl&user_id=$userId' : wsUrl;
     _service.connect(url);
   }
+
   void disconnect() => _service.disconnect();
 
   @override

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/calls"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/models"
 	"gorm.io/gorm"
 )
@@ -17,9 +18,10 @@ type VibrationService struct {
 	doorService  *DoorService
 	mu           sync.Mutex
 	lastFired    time.Time
+	lastCallID   string
 }
 
-const vibrationDebounce = 5 * time.Second
+const vibrationDebounce = 10 * time.Second
 
 func NewVibrationService(db *gorm.DB, eventService *EventService, soundService *SoundService, notify *NotificationService, doorService *DoorService) *VibrationService {
 	return &VibrationService{
@@ -32,14 +34,44 @@ func NewVibrationService(db *gorm.DB, eventService *EventService, soundService *
 }
 
 func (v *VibrationService) HandleVibration() {
-	// 1. Check if we are within the 15s auth window
-	if v.doorService.IsAuthWindowActive(15 * time.Second) {
-		log.Println("[VibrationService] Vibration detected but suppressed (recently authenticated window active)")
+	// 1. Suppress only while auth window is active AND motor has not yet reached lock angle (0).
+	if v.doorService.IsAuthWindowActive(autoLockDelay) && !v.doorService.IsMotorAtLockedPosition() {
+		log.Println("[VibrationService] Vibration detected but suppressed (auth window active and motor not at 0)")
 		return
 	}
 
-	// 2. Debounce to prevent multiple SOS events for the same interaction
 	v.mu.Lock()
+	// 2. Gate by current call state for vibration-triggered calls.
+	if v.lastCallID != "" {
+		status, ok := v.notify.GetCallStatus(v.lastCallID)
+		if ok {
+			if status == calls.StatusRinging || status == calls.StatusAccepted {
+				v.mu.Unlock()
+				log.Printf("[VibrationService] Suppressed: call %s still %s", v.lastCallID, status)
+				return
+			}
+			if status == calls.StatusDeclined {
+				declinedID := v.lastCallID
+				// Declined calls should re-arm future vibration events.
+				v.lastCallID = ""
+				log.Printf("[VibrationService] Last call %s was declined; re-arming", declinedID)
+			} else {
+				// Missed/ended sessions re-arm the flow for future vibration events.
+				v.lastCallID = ""
+			}
+		} else {
+			// Non-existent sessions re-arm the flow for future vibration events.
+			v.lastCallID = ""
+		}
+	}
+
+	if v.notify.HasActiveCallForEventType(models.EventForcedEntry) {
+		v.mu.Unlock()
+		log.Println("[VibrationService] Suppressed: forced-entry call already live")
+		return
+	}
+
+	// 3. Debounce to prevent multiple SOS events for the same interaction.
 	if time.Since(v.lastFired) < vibrationDebounce {
 		v.mu.Unlock()
 		return
@@ -47,11 +79,14 @@ func (v *VibrationService) HandleVibration() {
 	v.lastFired = time.Now()
 	v.mu.Unlock()
 
-	log.Println("[VibrationService] Vibration detected → triggering alert")
+	log.Println("[VibrationService] Vibration detected -> triggering alert")
 
 	v.soundService.PlaySOS()
 	v.eventService.LogEvent(models.EventForcedEntry, "")
-	v.notify.TriggerIncomingCall(models.EventForcedEntry, "")
+	callID := v.notify.TriggerIncomingCall(models.EventForcedEntry, "")
+	v.mu.Lock()
+	v.lastCallID = callID
+	v.mu.Unlock()
 
 	log.Printf("[VibrationService] SOS alert and video call triggered at %s", time.Now().Format(time.RFC3339))
 }

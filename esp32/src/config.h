@@ -17,8 +17,11 @@
 // ──────────────────────────────────────────────
 //  NTP time sync (for evening-only LED logic)
 // ──────────────────────────────────────────────
-#define NTP_SERVER        "pool.ntp.org"
-#define GMT_OFFSET_SEC    19800          // IST = UTC+5:30 = 19800 seconds
+#define NTP_SERVER_1      "pool.ntp.org"
+#define NTP_SERVER_2      "time.google.com"
+#define NTP_SERVER_3      "time.nist.gov"
+#define TZ_STRING         "IST-5:30"
+#define GMT_OFFSET_SEC    19800          // IST = UTC+5:30 = 19800 seconds (fallback if TZ not used)
 #define DAYLIGHT_OFFSET   0
 #define EVENING_HOUR      18             // LED activates from 6 PM onwards
 #define MORNING_HOUR       6             // LED deactivates from 6 AM onwards

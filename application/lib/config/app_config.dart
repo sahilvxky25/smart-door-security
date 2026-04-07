@@ -2,7 +2,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class AppConfig {
   static const _keyBaseUrl = 'backend_base_url';
-  static const defaultBaseUrl = 'http://192.168.137.1:8080';
+  static const defaultBaseUrl = 'http://172.23.26.147:8080';
 
   String baseUrl;
 

@@ -100,9 +100,9 @@ func (cm *CallManager) watchTimeout(callID string) {
 
 	if session.Status == StatusRinging {
 		session.Status = StatusMissed
-		
+
 		log.Printf("[CallManager] Call %s timed out -> Missed", callID)
-		
+
 		// Capture callback safely before unlocking
 		var callback func(string)
 		if cm.onMissedCall != nil {
@@ -112,7 +112,7 @@ func (cm *CallManager) watchTimeout(callID string) {
 
 		// Broadcast missed call so the Flutter app can cancel the ringing UI
 		cm.hub.BroadcastMissedCall(callID)
-		
+
 		if callback != nil {
 			callback(callID)
 		}
@@ -175,7 +175,7 @@ func (cm *CallManager) EndCall(callID string) bool {
 		// Usually we'd clean it up here or keep it for history. We'll simply mark it ended.
 		return true
 	}
-	
+
 	return false
 }
 
@@ -186,4 +186,21 @@ func (cm *CallManager) GetCall(callID string) (*CallSession, bool) {
 
 	session, exists := cm.calls[callID]
 	return session, exists
+}
+
+// HasLiveCallOfType reports whether a call of the given type is still ringing or accepted.
+func (cm *CallManager) HasLiveCallOfType(callType string) bool {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	for _, session := range cm.calls {
+		if session.Type != callType {
+			continue
+		}
+		if session.Status == StatusRinging || session.Status == StatusAccepted {
+			return true
+		}
+	}
+
+	return false
 }

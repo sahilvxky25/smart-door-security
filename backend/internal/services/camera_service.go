@@ -13,14 +13,14 @@ import (
 )
 
 type CameraService struct {
-	faceService  *FaceService
-	doorService  *DoorService
-	eventService *EventService
-	storage      *storage.MediaStorage
-	mqttClient   mqtt.Client
-	db           *gorm.DB
-	notifySvc    *NotificationService
-	soundService *SoundService
+	faceService   *FaceService
+	doorService   *DoorService
+	eventService  *EventService
+	storage       *storage.MediaStorage
+	mqttClient    mqtt.Client
+	db            *gorm.DB
+	notifySvc     *NotificationService
+	soundService  *SoundService
 	ultrasonicSvc *UltrasonicService
 	isCallActive  func() bool
 }
@@ -101,7 +101,11 @@ func (c *CameraService) HandleMotion() {
 	case result.Spoof:
 		log.Println("[Pipeline] SPOOF DETECTED → creating event + triggering call")
 		c.eventService.LogEvent(models.EventSpoofAttempt, imageURL)
-		c.notifySvc.TriggerIncomingCall(models.EventSpoofAttempt, imageURL)
+		if c.notifySvc.HasActiveCallForEventType(models.EventSpoofAttempt) {
+			log.Println("[Pipeline] Spoof call already live -> suppressing duplicate incoming call")
+		} else {
+			c.notifySvc.TriggerIncomingCall(models.EventSpoofAttempt, imageURL)
+		}
 		c.soundService.PlaySOS()
 
 	case result.Match:
@@ -116,6 +120,10 @@ func (c *CameraService) HandleMotion() {
 		// hardware events belong to the public feed, so userID remains nil
 		c.eventService.LogEvent(models.EventUnknownVisitor, imageURL)
 		c.mqttClient.Publish("home/door/unknown_visitor", 0, false, imageURL)
-		c.notifySvc.TriggerIncomingCall(models.EventUnknownVisitor, imageURL)
+		if c.notifySvc.HasActiveCallForEventType(models.EventUnknownVisitor) {
+			log.Println("[Pipeline] Unknown visitor call already live -> suppressing duplicate incoming call")
+		} else {
+			c.notifySvc.TriggerIncomingCall(models.EventUnknownVisitor, imageURL)
+		}
 	}
 }

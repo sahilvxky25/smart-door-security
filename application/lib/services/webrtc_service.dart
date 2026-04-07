@@ -78,7 +78,6 @@ class WebRTCService {
   }
 
   Future<void> hangup() async {
-    _signaling.send({'type': 'hangup'});
     await _cleanup();
   }
 

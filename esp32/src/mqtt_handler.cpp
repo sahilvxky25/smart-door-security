@@ -2,7 +2,10 @@
 #include "config.h"
 #include "actuators.h"
 #include <WiFi.h>
+#include <HTTPClient.h>
 #include <time.h>
+#include <sys/time.h>
+#include <cstring>
 
 // ──────────────────────────────────────────────
 //  Internals
@@ -12,16 +15,16 @@ static PubSubClient client(wifiClient);
 static unsigned long lastReconnectAttempt = 0;
 
 // ──────────────────────────────────────────────
-//  Time helpers (NTP-based evening check)
+//  Time helpers (time-sync based evening check)
 // ──────────────────────────────────────────────
 
 /// Returns true if the current local time is in the "evening"
 /// window (>= EVENING_HOUR or < MORNING_HOUR), i.e. dark hours.
-/// Falls back to true if NTP hasn't synced yet (safe default).
+/// Falls back to true if time isn't synced yet (safe default).
 static bool isEvening() {
     struct tm timeinfo;
     if (!getLocalTime(&timeinfo)) {
-        Serial.println("[Time] NTP not synced yet – defaulting to evening=true");
+        Serial.println("[Time] Time not synced yet - defaulting to evening=true");
         return true;   // safe default: activate LED if time unknown
     }
     int hour = timeinfo.tm_hour;
@@ -85,24 +88,72 @@ static void connectWiFi() {
 }
 
 // ──────────────────────────────────────────────
-//  NTP time sync
+//  HTTP time sync
 // ──────────────────────────────────────────────
-static void initNTP() {
-    configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET, NTP_SERVER);
-    Serial.println("[Time] NTP configured – waiting for sync …");
+static bool initTimeFromHttp() {
+    // Configure local timezone for getLocalTime()/localtime conversions.
+    setenv("TZ", TZ_STRING, 1);
+    tzset();
 
-    // Wait up to 5 seconds for initial sync
-    struct tm timeinfo;
-    for (int i = 0; i < 10; i++) {
-        if (getLocalTime(&timeinfo)) {
-            Serial.printf("[Time] NTP synced: %04d-%02d-%02d %02d:%02d:%02d\n",
-                          timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                          timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-            return;
-        }
-        delay(500);
+    HTTPClient http;
+    http.setTimeout(8000);
+
+    // User-requested endpoint.
+    http.begin("http://worldtimeapi.org/api/ip");
+
+    Serial.println("[Time] Fetching time from worldtimeapi.org ...");
+    const int httpCode = http.GET();
+    if (httpCode != HTTP_CODE_OK) {
+        Serial.printf("[Time] HTTP GET failed (code=%d)\n", httpCode);
+        http.end();
+        return false;
     }
-    Serial.println("[Time] NTP sync timeout – will retry in background");
+
+    const String body = http.getString();
+    http.end();
+
+    // Minimal JSON parse: extract "unixtime":<int>
+    const int keyPos = body.indexOf("\"unixtime\":");
+    if (keyPos < 0) {
+        Serial.println("[Time] Response missing unixtime");
+        return false;
+    }
+
+    int numStart = keyPos + (int)strlen("\"unixtime\":");
+    while (numStart < (int)body.length() && body[numStart] == ' ') {
+        numStart++;
+    }
+
+    int numEnd = numStart;
+    while (numEnd < (int)body.length() && isDigit(body[numEnd])) {
+        numEnd++;
+    }
+    if (numEnd == numStart) {
+        Serial.println("[Time] Failed to parse unixtime");
+        return false;
+    }
+
+    const long unixTime = body.substring(numStart, numEnd).toInt();
+    if (unixTime <= 0) {
+        Serial.println("[Time] Invalid unixtime value");
+        return false;
+    }
+
+    timeval tv;
+    tv.tv_sec = unixTime;
+    tv.tv_usec = 0;
+    settimeofday(&tv, nullptr);
+
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+        Serial.printf("[Time] Time synced via HTTP: %04d-%02d-%02d %02d:%02d:%02d\n",
+                      timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                      timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    } else {
+        Serial.println("[Time] Time set but getLocalTime() still unavailable");
+    }
+
+    return true;
 }
 
 // ──────────────────────────────────────────────
@@ -130,7 +181,7 @@ static bool mqttReconnect() {
 // ──────────────────────────────────────────────
 void mqttInit() {
     connectWiFi();
-    initNTP();
+    initTimeFromHttp();
 
     client.setServer(MQTT_BROKER, MQTT_PORT);
     client.setCallback(mqttCallback);

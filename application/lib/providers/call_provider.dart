@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../models/signaling_message.dart';
+import '../services/callkit_service.dart';
 import '../services/signaling_service.dart';
 import '../services/webrtc_service.dart';
 
@@ -46,6 +47,19 @@ class CallProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> resetCallState({bool endNativeCallUi = false}) async {
+    _requestTimer?.cancel();
+    final callId = activeCallId;
+    state = CallState.idle;
+    incomingImageUrl = null;
+    activeCallId = null;
+    await _disposeRenderer();
+    if (endNativeCallUi && callId != null) {
+      await CallKitService().endCall(callId);
+    }
+    notifyListeners();
+  }
+
   /// User accepted the incoming call → tell the backend to start WebRTC.
   void acceptCall() {
     state = CallState.requesting;
@@ -64,17 +78,18 @@ class CallProvider extends ChangeNotifier {
   }
 
   /// User declined the incoming call.
-  void declineCall() {
+  Future<void> declineCall() async {
+    final callId = activeCallId;
     if (activeCallId != null) {
       _signaling.send({
         'type': 'call_declined',
         'call_id': activeCallId,
       });
     }
-    state = CallState.idle;
-    incomingImageUrl = null;
-    activeCallId = null;
-    notifyListeners();
+    if (callId != null) {
+      await CallKitService().endCall(callId);
+    }
+    await resetCallState();
   }
 
   /// Manual call request (e.g. from a "Call Door" button).
@@ -108,11 +123,7 @@ class CallProvider extends ChangeNotifier {
           break;
         case 'hangup':
           await _webrtc.onRemoteHangup();
-          state = CallState.idle;
-          incomingImageUrl = null;
-          activeCallId = null;
-          await _disposeRenderer();
-          notifyListeners();
+          await resetCallState(endNativeCallUi: true);
           break;
       }
     } catch (e) {
@@ -132,6 +143,7 @@ class CallProvider extends ChangeNotifier {
 
   Future<void> hangup() async {
     _requestTimer?.cancel();
+    final callId = activeCallId;
     if (activeCallId != null) {
       _signaling.send({
         'type': 'hangup',
@@ -139,11 +151,22 @@ class CallProvider extends ChangeNotifier {
       });
     }
     await _webrtc.hangup();
-    state = CallState.idle;
-    incomingImageUrl = null;
-    activeCallId = null;
-    await _disposeRenderer();
-    notifyListeners();
+    if (callId != null) {
+      await CallKitService().endCall(callId);
+    }
+    await resetCallState();
+  }
+
+  Future<void> endFromNativeUi() async {
+    _requestTimer?.cancel();
+    if (activeCallId != null) {
+      _signaling.send({
+        'type': 'hangup',
+        'call_id': activeCallId,
+      });
+    }
+    await _webrtc.hangup();
+    await resetCallState();
   }
 
   Future<void> _initRenderer() async {

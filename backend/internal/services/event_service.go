@@ -9,7 +9,7 @@ import (
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/models"
 	"gorm.io/gorm"
 )
- 
+
 const VisitorAlertDebounce = 2 * time.Minute
 
 type EventService struct {
@@ -26,19 +26,15 @@ func NewEventService(db *gorm.DB) *EventService {
 }
 
 func (e *EventService) LogEvent(eventType string, imageURL string) (*models.Event, error) {
-	if e.GetActiveOwner == nil {
-		return nil, fmt.Errorf("cannot log event %s: no GetActiveOwner provider", eventType)
-	}
-
-	userID := e.GetActiveOwner()
-	if userID == nil {
-		return nil, fmt.Errorf("cannot log event %s: no active user session", eventType)
+	userID, err := e.resolveEventUserID(eventType)
+	if err != nil {
+		return nil, err
 	}
 
 	event := models.Event{
 		Timestamp: time.Now(),
 		EventType: eventType,
-		UserID:    *userID,
+		UserID:    userID,
 		ImageURL:  imageURL,
 	}
 
@@ -47,7 +43,7 @@ func (e *EventService) LogEvent(eventType string, imageURL string) (*models.Even
 		return nil, err
 	}
 
-	log.Printf("[EventService] Created event: type=%s userID=%v imageURL=%s", eventType, *userID, imageURL)
+	log.Printf("[EventService] Created event: type=%s userID=%v imageURL=%s", eventType, userID, imageURL)
 
 	if e.OnEventCreated != nil {
 		e.OnEventCreated(&event)
@@ -71,6 +67,22 @@ func (e *EventService) LogEventWithDebounce(eventType string, imageURL string, w
 		e.lastFired.Store(eventType, time.Now())
 	}
 	return event, err
+}
+
+func (e *EventService) resolveEventUserID(eventType string) (uint, error) {
+	if e.GetActiveOwner != nil {
+		if userID := e.GetActiveOwner(); userID != nil {
+			return *userID, nil
+		}
+	}
+
+	var user models.User
+	if err := e.db.Order("id ASC").First(&user).Error; err != nil {
+		return 0, fmt.Errorf("cannot log event %s: unable to resolve owner: %w", eventType, err)
+	}
+
+	log.Printf("[EventService] No active owner session for %s, falling back to userID=%d", eventType, user.ID)
+	return user.ID, nil
 }
 
 func (e *EventService) ListEvents(userID uint, limit, offset int) ([]models.Event, error) {

@@ -52,6 +52,8 @@ func (m *MotorService) HandleMotorReading(payload string) {
 		return
 	}
 
+	m.doorService.UpdateCurrentMotorAngle(angle)
+
 	expected := m.doorService.ExpectedAngle()
 	diff := math.Abs(float64(angle - expected))
 
