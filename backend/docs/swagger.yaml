@@ -196,7 +196,7 @@ paths:
   /door/unlock:
     post:
       description: Sends an MQTT UNLOCK command to the servo and auto-locks after
-        5 s. Logs a MANUAL_UNLOCK event.
+        15 s. Logs a MANUAL_UNLOCK event.
       produces:
       - application/json
       responses:
@@ -415,6 +415,30 @@ paths:
       summary: Health check
       tags:
       - health
+  /security/clear-intrusion:
+    post:
+      description: Clears the active intrusion lockout so visitor authentication can
+        resume.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Clear intrusion state
+      tags:
+      - security
   /users:
     get:
       description: Returns a list of all registered users

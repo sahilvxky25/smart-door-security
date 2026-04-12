@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const VisitorAlertDebounce = 2 * time.Minute
+const VisitorAlertDebounce = 1 * time.Minute
 
 type EventService struct {
 	db             *gorm.DB

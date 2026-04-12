@@ -1,191 +1,215 @@
-# Smart Door Security — Sensor Reference
+# Smart Door Security - Sensor Reference
 
 ## Overview
 
-The ESP32 reads all sensors and publishes events via MQTT to the backend. The backend subscribes to each topic, applies debounce logic, logs events to PostgreSQL, sends push notifications, and optionally publishes commands back to the ESP32.
+The ESP32 reads sensors and publishes events over MQTT. The backend subscribes to those topics, updates runtime state, logs events to PostgreSQL, sends notifications, and publishes actuator commands back to the ESP32 when needed.
+
+The current runtime splits responsibilities like this:
+
+- `IntrusionFlow` owns vibration and magnetic intrusion rules.
+- `VisitorAuthFlow` owns the PIR-triggered visitor authentication path.
+- `UltrasonicService`, `ProximityService`, `DoorService`, and `MotorService` are lower-level sensor/actuator services.
 
 ---
 
-## Sensors & Actuators
+## Sensors and Actuators
 
 ### 1. 801S Vibration Sensor
 
-| Property                 | Value                                                     |
-| ------------------------ | --------------------------------------------------------- |
-| **GPIO**                 | IO14                                                      |
-| **Logic**                | Active HIGH on vibration                                  |
-| **MQTT topic (publish)** | `home/door/vibration`                                     |
-| **Payload**              | `"INTRUSION"`                                             |
-| **Backend service**      | `VibrationService.HandleVibration()`                      |
-| **Actions**              | Plays SOS alert · Logs `FORCED_ENTRY` · Push notification |
-| **Debounce (ESP32)**     | 3 s                                                       |
+| Property | Value |
+| --- | --- |
+| GPIO | IO14 |
+| Logic | Active HIGH on vibration |
+| MQTT topic (publish) | `home/door/vibration` |
+| Payload | `"INTRUSION"` |
+| Backend flow | `IntrusionFlow.HandleVibrationDetected()` |
+| Actions | May activate intrusion state, play SOS, log `FORCED_ENTRY`, and trigger a forced-entry call |
+| Debounce (ESP32) | 3 s |
+| Debounce (backend) | 10 s |
 
-**Purpose**: Detects forceful door knocks or tampering attempts. Any significant vibration is treated as a potential forced-entry attempt.
+Purpose: Detects forceful vibration or tampering. During the authorization window, vibration is suppressed only while the motor has not yet reached the locked position.
 
 ---
 
-### 2. MC-38 Magnetic Reed Switch (Door Sensor)
+### 2. MC-38 Magnetic Reed Switch
 
-| Property                 | Value                                                       |
-| ------------------------ | ----------------------------------------------------------- |
-| **GPIO**                 | IO33 (INPUT_PULLUP)                                         |
-| **Logic**                | HIGH = door open (magnet removed)                           |
-| **MQTT topics**          | `home/door/magnetic/open` \| `home/door/magnetic/closed`    |
-| **Payload**              | _None (Empty)_                                              |
-| **Backend service**      | `MagneticService.HandleDoorOpen()` / `HandleDoorClose()`    |
-| **Actions (OPEN)**       | Logs `DOOR_OPENED` · Starts 30 s left-open timer            |
-| **Actions (CLOSED)**     | Logs `DOOR_CLOSED` · Cancels left-open timer                |
-| **Left-open alert**      | After 30 s open: SOS + logs `DOOR_LEFT_OPEN` + notification |
-| **Edge detection**       | Yes — only publishes on state change                        |
+| Property | Value |
+| --- | --- |
+| GPIO | IO33 (`INPUT_PULLUP`) |
+| Logic | HIGH = door open |
+| MQTT topics | `home/door/magnetic/open` and `home/door/magnetic/closed` |
+| Payload | None |
+| Backend flow | `IntrusionFlow.HandleDoorOpened()` and `IntrusionFlow.HandleDoorClosed()` |
+| Open behavior | Authorized open logs `DOOR_OPENED` and starts the left-open timer. Unauthorized open logs `FORCED_ENTRY`, plays SOS, and may trigger a forced-entry call |
+| Close behavior | Logs `DOOR_CLOSED` and cancels any active left-open timer |
+| Left-open timeout | 18 s |
+| Left-open alert | After 18 s on an authorized open: plays SOS, logs `DOOR_LEFT_OPEN`, sends notification |
+| Edge detection | Yes, ESP32 publishes on state change |
 
-**Purpose**: Tracks whether the physical door is open or closed. Raises an alert if the door is left open for more than 30 seconds.
+Purpose: Tracks door open/closed state and participates in forced-entry detection when the door opens outside the authorization window.
 
 ---
 
 ### 3. HC-SR501 PIR Motion Sensor
 
-| Property                 | Value                                                                                         |
-| ------------------------ | --------------------------------------------------------------------------------------------- |
-| **GPIO**                 | IO27                                                                                          |
-| **Logic**                | Active HIGH on motion                                                                         |
-| **MQTT topic (publish)** | `home/door/pir`                                                                               |
-| **Payload**              | `"DETECTED"`                                                                                  |
-| **Backend service**      | `CameraService.HandleMotion()`                                                                |
-| **Actions**              | Captures camera frame → face recognition → AUTHORIZED_ENTRY / UNKNOWN_VISITOR / SPOOF_ATTEMPT |
-| **Debounce (ESP32)**     | 3 s                                                                                           |
+| Property | Value |
+| --- | --- |
+| GPIO | IO27 |
+| Logic | Active HIGH on motion |
+| MQTT topic (publish) | `home/door/pir` |
+| Payload | `"DETECTED"` |
+| Backend flow | `VisitorAuthFlow.HandleMotionDetected()` |
+| Actions | If intrusion is inactive, no call is active, and ultrasonic confirms visitor-at-door: capture frame, run face recognition, then produce `AUTHORIZED_ENTRY`, `UNKNOWN_VISITOR`, or `SPOOF_ATTEMPT` |
+| Debounce (ESP32) | 3 s |
 
-**Purpose**: Primary motion detector. Triggers the face recognition pipeline whenever someone moves near the door.
-
----
-
-### 4. Ultrasonic Sensor (HC-SR04)
-
-| Property                       | Value                                                                                                                                |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **GPIO TRIG**                  | IO23                                                                                                                                 |
-| **GPIO ECHO**                  | IO22                                                                                                                                 |
-| **MQTT topic — raw distance**  | `home/door/ultrasonic`                                                                                                               |
-| **Payload**                    | Distance in cm, e.g. `"85.5"`                                                                                                        |
-| **MQTT topic — proximity**     | `home/door/proximity`                                                                                                                |
-| **Payload**                    | `"DETECTED"` (when < 50 cm)                                                                                                          |
-| **Backend service**            | `UltrasonicService.HandleDistance()`                                                                                                 |
-| **Distance tiers**             | < 80 cm → triggers face pipeline · 80–200 cm → logs `VISITOR_APPROACHING` · > 200 cm → no action                                     |
-| **Proximity service**          | `ProximityService.HandleProximityDetected()` → publishes `home/door/proximity_alert VISITOR_NEAR` → ESP32 flashes LED (evening only) |
-| **Read interval (ESP32)**      | Every 2 s                                                                                                                            |
-| **Debounce (ESP32 proximity)** | 5 s                                                                                                                                  |
-| **Debounce (backend)**         | 10 s                                                                                                                                 |
-
-**Purpose**: Secondary presence detection. Provides distance data for tiered response (approaching vs. at-door) and drives the evening proximity LED indicator.
+Purpose: Starts the visitor authentication flow, but only after backend policy checks pass.
 
 ---
 
-### 5. SG90 Servo Motor (Door Lock Actuator)
+### 4. HC-SR04 Ultrasonic Sensor
 
-| Property                   | Value                                                                                                                                  |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| **GPIO**                   | IO32 (PWM)                                                                                                                             |
-| **MQTT topic (subscribe)** | `home/door/servo`                                                                                                                      |
-| **Payload**                | `"UNLOCK"` → 90° \| `"LOCK"` → 0°                                                                                                      |
-| **Backend service**        | `DoorService.UnlockDoor()` / `LockDoor()`                                                                                              |
-| **Auto-lock**              | 5 s after unlock                                                                                                                       |
-| **Tamper detection**       | `MotorService` monitors `home/door/motor`: if reported angle deviates > 15° from commanded angle → SOS + `MOTOR_TAMPER` + notification |
+| Property | Value |
+| --- | --- |
+| GPIO TRIG | IO23 |
+| GPIO ECHO | IO22 |
+| MQTT topic | `home/door/ultrasonic` |
+| Payload | Distance in cm, for example `"85.5"` |
+| Backend service | `UltrasonicService.HandleDistance()` |
+| Current backend use | Stores the latest distance reading and reports `IsAtDoor()` when the last value is below `20 cm` |
+| Read interval (ESP32) | Every 2 s |
 
-**Purpose**: Physically locks and unlocks the door. Paired with MotorService to detect if the servo is moved physically without a backend command.
+Purpose: Maintains the latest distance-to-door reading. `VisitorAuthFlow` uses it as a gate before face recognition.
 
----
-
-### 6. Door Camera (USB/Webcam)
-
-| Property                 | Value                                                              |
-| ------------------------ | ------------------------------------------------------------------ |
-| **Interface**            | USB (accessed via FFmpeg `dshow` / `v4l2`)                         |
-| **Backend context**      | `webrtc.DoorPeer` / `CameraService`                                |
-| **Streaming logic**      | WebRTC VP8 video sent directly to Flutter app                      |
-| **Snapshot logic**       | Triggered by ESP32 `home/door/pir` → posts to Face Service         |
-| **Events produced**      | `AUTHORIZED_ENTRY` \| `UNKNOWN_VISITOR` \| `SPOOF_ATTEMPT`         |
-
-**Purpose**: Provides live streaming during a WebRTC call, and captures snapshots for facial recognition and liveness detection when motion is detected by the PIR sensor.
+Note: The current backend does not implement the older multi-tier distance behavior described in previous docs. It only uses the `< 20 cm` at-door threshold.
 
 ---
 
-### 7. Door Microphone & Speaker (Two-Way Audio)
+### 5. IR Proximity Sensor
 
-| Property                 | Value                                                              |
-| ------------------------ | ------------------------------------------------------------------ |
-| **Interface**            | USB/Audio Jack (accessed via FFmpeg/`ffplay`)                      |
-| **Backend context**      | `webrtc.DoorPeer`                                                  |
-| **Laptop → Phone**       | Microphone → FFmpeg (`-f rtp`) → UDP Port → `pionwebrtc`           |
-| **Phone → Laptop**       | App → WebRTC RTP → `pionwebrtc.oggwriter` → FFplay (`-f ogg`)      |
+| Property | Value |
+| --- | --- |
+| MQTT topic | `home/door/proximity` |
+| Payload | `"DETECTED"` |
+| Backend service | `ProximityService.HandleProximityDetected()` |
+| Current backend action | Publishes `home/door/proximity_alert` with `VISITOR_NEAR` |
 
-**Purpose**: Enables real-time, two-way WebRTC audio communication between the door (Host PC) and the owner's mobile app.
-
-**Implementation Details (`door_peer.go`)**:
-- **`detectDShowDevices()`**: Auto-discovers available physical audio/video hardware using `ffmpeg -list_devices`, parsing both legacy and modern log outputs. Uses `.env` vars (`DOOR_AUDIO_DEVICE`) as an exact match target.
-- **`buildAudioArgs()`**: Configures FFmpeg to capture audio, encode to `libopus` at 48000Hz, and package it natively into standard Opus RTP packets (`-f rtp rtp://127.0.0.1:<port>`). 
-- **`pumpAudioRTP()`**: Bridges the Laptop → Phone audio gap. Opens a local UDP listener, catches the raw RTP packets generated by FFmpeg, and writes them directly to Pion's `TrackLocalStaticRTP`. Bypassing an intermediate `.ogg` container prevents multi-frame RTP packetization errors.
-- **`playRemoteAudio()`**: Bridges the Phone → Laptop audio gap. Receives RTP packets from the Flutter app, safely wraps them into an OGG container stream using Pion's `oggwriter`, and pipes it into an invisible `ffplay` subprocess to play through the local speakers.
+Purpose: Drives local door-area feedback on the ESP32 side. It does not currently log backend events or trigger visitor authentication on its own.
 
 ---
 
-### 8. Doorbell / Smart Button (IO0_BTN)
+### 6. SG90 Servo Motor
 
-| Property                 | Value                                                              |
-| ------------------------ | ------------------------------------------------------------------ |
-| **GPIO**                 | IO0                                                                |
-| **Status**               | Present in physical circuit, but currently **unhandled** (reserved)|
+| Property | Value |
+| --- | --- |
+| GPIO | IO32 (PWM) |
+| MQTT topic (subscribe) | `home/door/servo` |
+| Payload | `"UNLOCK"` or `"LOCK"` |
+| Backend service | `DoorService.UnlockDoor()` and `DoorService.LockDoor()` |
+| Auto-lock delay | 15 s |
+| Authorization window | 15 s, tracked through `SecurityStateService` |
 
-**Purpose**: Intended to be used as a smart doorbell or manual unlock button. Currently unhandled in firmware because it operates on the ESP32 boot strap pin (`IO0`) and requires careful handling.
-
----
-
-## Event Types Reference
-
-| Constant                  | String                | Produced By                      |
-| ------------------------- | --------------------- | -------------------------------- |
-| `EventAuthorizedEntry`    | `AUTHORIZED_ENTRY`    | Face recognition (known face)    |
-| `EventUnknownVisitor`     | `UNKNOWN_VISITOR`     | Face recognition (no match)      |
-| `EventForcedEntry`        | `FORCED_ENTRY`        | Vibration sensor                 |
-| `EventManualUnlock`       | `MANUAL_UNLOCK`       | POST /door/unlock                |
-| `EventManualLock`         | `MANUAL_LOCK`         | POST /door/lock                  |
-| `EventSpoofAttempt`       | `SPOOF_ATTEMPT`       | Face recognition (liveness fail) |
-| `EventDoorOpened`         | `DOOR_OPENED`         | Magnetic sensor                  |
-| `EventDoorClosed`         | `DOOR_CLOSED`         | Magnetic sensor                  |
-| `EventDoorLeftOpen`       | `DOOR_LEFT_OPEN`      | Magnetic sensor (30 s timer)     |
-| `EventVisitorApproaching` | `VISITOR_APPROACHING` | Ultrasonic / Proximity           |
-| `EventMotorTamper`        | `MOTOR_TAMPER`        | Motor tamper detection           |
+Purpose: Physically locks and unlocks the door.
 
 ---
 
-## API Endpoints (Sensor-Related)
+### 7. Motor Angle Feedback
+
+| Property | Value |
+| --- | --- |
+| MQTT topic (publish) | `home/door/motor` |
+| Payload | Current motor angle, for example `"0"` or `"55"` |
+| Backend service | `MotorService.HandleMotorReading()` |
+| Tolerance | 5 degrees |
+| Current behavior | Updates latest motor angle and logs mismatches only |
+
+Purpose: Feeds the latest motor angle back to the backend. The current runtime does not raise `MOTOR_TAMPER` alarms from motor mismatch; it only logs deviation.
+
+---
+
+### 8. Door Camera
+
+| Property | Value |
+| --- | --- |
+| Interface | USB webcam |
+| Backend context | `webrtc.DoorPeer` and `VisitorAuthFlow` |
+| Streaming logic | WebRTC video stream to the mobile app |
+| Snapshot logic | Triggered from the PIR path through `VisitorAuthFlow` and `FaceService` |
+| Events produced | `AUTHORIZED_ENTRY`, `UNKNOWN_VISITOR`, `SPOOF_ATTEMPT` |
+
+Purpose: Supports live door video and snapshot-based face recognition.
+
+---
+
+### 9. Door Microphone and Speaker
+
+| Property | Value |
+| --- | --- |
+| Interface | USB / audio jack |
+| Backend context | `webrtc.DoorPeer` |
+
+Purpose: Provides two-way audio during WebRTC calls between the door device and the owner's app.
+
+---
+
+### 10. Doorbell / Smart Button
+
+| Property | Value |
+| --- | --- |
+| GPIO | IO0 |
+| Status | Present in hardware, currently unused by backend runtime |
+
+Purpose: Reserved for future use.
+
+---
+
+## Event Types
+
+| Constant | String | Current runtime producer |
+| --- | --- | --- |
+| `EventAuthorizedEntry` | `AUTHORIZED_ENTRY` | `VisitorAuthFlow` on recognized face |
+| `EventUnknownVisitor` | `UNKNOWN_VISITOR` | `VisitorAuthFlow` on unrecognized face |
+| `EventForcedEntry` | `FORCED_ENTRY` | `IntrusionFlow` on vibration or unauthorized magnetic open |
+| `EventIntrusionCleared` | `INTRUSION_CLEARED` | Manual clear path or forced-entry call decline after intrusion is cleared |
+| `EventManualUnlock` | `MANUAL_UNLOCK` | `POST /door/unlock` |
+| `EventManualLock` | `MANUAL_LOCK` | `POST /door/lock` and current auto-lock path |
+| `EventSpoofAttempt` | `SPOOF_ATTEMPT` | `VisitorAuthFlow` on liveness failure |
+| `EventDoorOpened` | `DOOR_OPENED` | `IntrusionFlow` on authorized magnetic open |
+| `EventDoorClosed` | `DOOR_CLOSED` | `IntrusionFlow` on magnetic close |
+| `EventDoorLeftOpen` | `DOOR_LEFT_OPEN` | `IntrusionFlow` authorized-open timeout |
+| `EventVisitorApproaching` | `VISITOR_APPROACHING` | `VisitorAuthFlow` after PIR plus ultrasonic-at-door confirmation |
+| `EventHandleTamper` | `HANDLE_TAMPER` | Defined constant, not emitted by current runtime |
+| `EventMotorTamper` | `MOTOR_TAMPER` | Defined constant, not emitted by current runtime |
+
+---
+
+## API Endpoints
 
 All endpoints require `Authorization: Bearer <jwt>` except `/health`.
 
-| Method | Path           | Description                                                 |
-| ------ | -------------- | ----------------------------------------------------------- |
-| `GET`  | `/health`      | Server health check                                         |
-| `POST` | `/door/unlock` | Manually unlock door (→ servo UNLOCK, auto-locks after 5 s) |
-| `POST` | `/door/lock`   | Manually lock door (→ servo LOCK)                           |
-| `GET`  | `/door/state`  | Get current servo state (`LOCKED` / `UNLOCKED`) and angle   |
-| `GET`  | `/events`      | List recent events (all sensor-triggered + manual)          |
-| `GET`  | `/events/:id`  | Get a single event by ID                                    |
-
-### Swagger UI
-
-Visit [`http://localhost:8080/swagger/index.html`](http://localhost:8080/swagger/index.html) to explore all endpoints interactively. Click **Authorize** and enter `Bearer <your-jwt>` to test protected routes.
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/health` | Server health check |
+| `POST` | `/door/unlock` | Manually unlock door, clear active intrusion state, and auto-lock after 15 s |
+| `POST` | `/door/lock` | Manually lock door and clear active intrusion state |
+| `POST` | `/security/clear-intrusion` | Explicitly clear active intrusion state without changing the door state |
+| `GET` | `/door/state` | Get current expected servo state and angle |
+| `GET` | `/events` | List recent events |
+| `GET` | `/events/:id` | Get a single event by ID |
 
 ---
 
-## MQTT Flow Diagram
+## MQTT Runtime Diagram
 
-```
-ESP32 Sensors                 Backend Services              Flutter App
-─────────────                 ────────────────              ───────────
-PIR          →  pir         → CameraService         →  push notification
-Vibration    →  vibration   → VibrationService       →  push notification
-Magnetic     →  magnetic/open/closed  → MagneticService    →  WebSocket event
-Ultrasonic   →  ultrasonic  → UltrasonicService      →  push notification
-             →  proximity   → ProximityService
-                            → (publishes proximity_alert)
-Servo        ←  servo       ← DoorService            ←  POST /door/unlock
-Motor        →  motor       → MotorService            →  push notification
+```text
+ESP32 Sensor/Event              Backend Flow or Service         Result
+---------------------           -----------------------         ----------------------------
+home/door/pir                  -> VisitorAuthFlow             -> face auth / unlock / call
+home/door/vibration            -> IntrusionFlow              -> forced-entry alert / call
+home/door/magnetic/open        -> IntrusionFlow              -> door-open or forced-entry path
+home/door/magnetic/closed      -> IntrusionFlow              -> door-closed path
+home/door/ultrasonic           -> UltrasonicService          -> update latest distance
+home/door/proximity            -> ProximityService           -> publish proximity_alert
+POST /door/unlock              -> DoorService                -> publish UNLOCK
+POST /door/lock                -> DoorService                -> publish LOCK
+home/door/motor                -> MotorService               -> update angle / log mismatch
 ```

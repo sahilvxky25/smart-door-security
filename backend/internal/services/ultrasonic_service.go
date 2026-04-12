@@ -18,32 +18,29 @@ import (
 //   80–200 cm → someone approaching, logs VISITOR_APPROACHING
 //   > 200 cm → clear, no action
 type UltrasonicService struct {
-	db            *gorm.DB
-	mqttClient    mqtt.Client
-	eventService  *EventService
-	cameraService *CameraService
-	notify        *NotificationService
-	mu            sync.RWMutex
-	lastDistance  float64
+	db           *gorm.DB
+	mqttClient   mqtt.Client
+	eventService *EventService
+	notify       *NotificationService
+	mu           sync.RWMutex
+	lastDistance float64
 }
 
 const (
-	distanceAtDoorCm     = 20.0
+	distanceAtDoorCm = 20.0
 )
 
 func NewUltrasonicService(
 	db *gorm.DB,
 	mqttClient mqtt.Client,
 	eventService *EventService,
-	cameraService *CameraService,
 	notify *NotificationService,
 ) *UltrasonicService {
 	return &UltrasonicService{
-		db:            db,
-		mqttClient:    mqttClient,
-		eventService:  eventService,
-		cameraService: cameraService,
-		notify:        notify,
+		db:           db,
+		mqttClient:   mqttClient,
+		eventService: eventService,
+		notify:       notify,
 	}
 }
 

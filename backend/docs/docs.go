@@ -227,7 +227,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Sends an MQTT UNLOCK command to the servo and auto-locks after 5 s. Logs a MANUAL_UNLOCK event.",
+                "description": "Sends an MQTT UNLOCK command to the servo and auto-locks after 15 s. Logs a MANUAL_UNLOCK event.",
                 "produces": [
                     "application/json"
                 ],
@@ -546,6 +546,43 @@ const docTemplate = `{
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/security/clear-intrusion": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Clears the active intrusion lockout so visitor authentication can resume.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "security"
+                ],
+                "summary": "Clear intrusion state",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

@@ -1,44 +1,67 @@
 # Pipeline Edge-Case Audit
 
-Scope reviewed:
-- Known user path: `PIR -> CameraService -> FaceService -> DoorService -> MagneticService`
-- Unknown user path: `PIR -> CameraService -> NotificationService -> CallManager`
-- Theft path: `VibrationService` and `MagneticService` forced-entry flows
+This file documents the current backend behavior after the flow refactor.
 
-## Fixed in code
+## Runtime Paths
 
-1. Repeated unlocks could schedule overlapping auto-lock goroutines.
-- `DoorService` now keeps a single resettable auto-lock timer.
-- Old timers are invalidated so a newer authorized unlock is not cut short by an older timer.
+- Known visitor path: `PIR -> VisitorAuthFlow -> FaceService -> DoorService`
+- Unknown visitor path: `PIR -> VisitorAuthFlow -> NotificationService -> CallManager`
+- Intrusion path: `Vibration or unauthorized magnetic open -> IntrusionFlow`
 
-2. Door-open theft detection could miss real forced-entry cases.
-- `MagneticService` now treats any door open outside the auth window as forced entry.
-- The old condition depended on motor angle and could suppress a real theft event when the lock still read `0`.
+## Current Guarantees
 
-3. Theft flows could stack duplicate incoming calls across sensors.
-- `CallManager` now exposes live-call lookup by event type.
-- `VibrationService`, `MagneticService`, and `CameraService` suppress duplicate calls while an equivalent call is already `ringing` or `accepted`.
+1. Visitor authentication is blocked while intrusion is active.
 
-4. Unauthorized opens could still start the left-open timer.
-- `MagneticService` now starts the `DOOR_LEFT_OPEN` timer only for authorized opens.
-- This prevents follow-up "door left open" noise during a theft/forced-entry incident.
+- `SecurityStateService` owns the `intrusionActive` flag.
+- `VisitorAuthFlow` exits early when intrusion is active.
 
-5. Left-open timeout drifted from the documented behavior.
-- `leftOpenTimeout` is set to `30s` to match the sensor reference docs.
+2. Repeated unlocks do not stack auto-lock timers.
 
-6. Hardware events could fail to persist when no owner WebSocket session was active.
-- `EventService` now falls back to the first registered user when there is no active owner connection.
-- This keeps unknown-visitor, theft, and door-state events from disappearing entirely when the app is offline.
+- `DoorService` keeps a single resettable timer.
+- The current auto-lock delay is `15s`.
 
-## Remaining design risks
+3. Unauthorized magnetic open is treated as forced entry.
 
-1. Event ownership fallback assumes a single-owner deployment.
-- If multiple owner accounts need separate event histories, event attribution should be redesigned instead of using the first registered user as fallback.
+- `IntrusionFlow` checks the shared authorization window.
+- If the door opens outside that window, it activates intrusion, logs `FORCED_ENTRY`, plays SOS, and may trigger a forced-entry call.
 
-2. Motor tamper still logs only.
-- `MotorService` currently records angle mismatches in logs but does not raise an alert.
-- That may be intentional to avoid false positives, but it means servo-only tamper is not a full theft alarm path right now.
+4. Authorized magnetic open can still produce a left-open alert.
 
-3. Auto-lock is still logged as `MANUAL_LOCK`.
-- The system has no distinct `AUTO_LOCK` event type yet, so auto-lock history is semantically imprecise.
+- `IntrusionFlow` starts a left-open timer only for authorized opens.
+- The current left-open timeout is `18s`, i.e, `18s`-`15s`=`3s` is left to check whether intrusion service will activate or not.
 
+5. Forced-entry calls are deduplicated.
+
+- `IntrusionFlow` suppresses duplicate vibration-triggered calls while a forced-entry call is already live.
+- `VisitorAuthFlow` suppresses duplicate unknown-visitor and spoof-attempt calls by event type.
+
+6. Declined vibration calls re-arm future vibration incidents.
+
+- If the previous forced-entry call from vibration was declined, the next vibration can still create a new call after debounce.
+
+7. Manual owner actions clear intrusion state.
+
+- `POST /door/unlock` clears intrusion before unlocking.
+- `POST /door/lock` clears intrusion before locking.
+- `POST /security/clear-intrusion` clears intrusion without changing the door state.(also sends /door/lock ping, fallback for now fix this later)
+
+## Important Current Limitations
+
+1. Motor tamper is log-only.
+
+- `MotorService` updates the latest motor angle and logs mismatches.
+- It does not currently emit `MOTOR_TAMPER`, play SOS, or trigger notifications.
+
+2. Auto-lock still logs `MANUAL_LOCK`.
+
+- The system does not have a distinct `AUTO_LOCK` event type yet.
+
+3. Event constants are broader than runtime behavior.
+
+- `HANDLE_TAMPER` and `MOTOR_TAMPER` exist as constants but are not currently produced by the runtime path. (will be used later ffor scaling this project)
+
+4. Ultrasonic behavior is simpler than older docs implied.
+
+- The backend stores the latest distance reading.
+- `VisitorAuthFlow` only checks whether the last reading is below `20 cm`.
+- The old multi-tier `VISITOR_APPROACHING` distance model is not active in current code.

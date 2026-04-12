@@ -13,6 +13,7 @@ const (
 	EventDoorClosed         = "DOOR_CLOSED"
 	EventDoorLeftOpen       = "DOOR_LEFT_OPEN"
 	EventVisitorApproaching = "VISITOR_APPROACHING"
+	EventIntrusionCleared   = "INTRUSION_CLEARED"
 	EventHandleTamper       = "HANDLE_TAMPER"
 	EventMotorTamper        = "MOTOR_TAMPER"
 )

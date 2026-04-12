@@ -40,6 +40,7 @@ type CallManager struct {
 	hub          HubInterface // For broadcasting state changes (e.g. missed call)
 	timeout      time.Duration
 	onMissedCall func(callID string)
+	onDeclined   func(callID string, callType string)
 }
 
 func NewCallManager(hub HubInterface, timeout time.Duration) *CallManager {
@@ -62,6 +63,13 @@ func (cm *CallManager) SetOnMissedCall(fn func(callID string)) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	cm.onMissedCall = fn
+}
+
+// SetOnDeclinedCall sets a callback executed when a ringing call is declined.
+func (cm *CallManager) SetOnDeclinedCall(fn func(callID string, callType string)) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.onDeclined = fn
 }
 
 // CreateCallSession starts a new call session, sets it to ringing, and returns the CallID.
@@ -143,19 +151,25 @@ func (cm *CallManager) AcceptCall(callID string) bool {
 // DeclineCall transitions a ringing call to declined. Returns true if successful.
 func (cm *CallManager) DeclineCall(callID string) bool {
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
 	session, exists := cm.calls[callID]
 	if !exists {
+		cm.mu.Unlock()
 		return false
 	}
 
 	if session.Status == StatusRinging {
 		session.Status = StatusDeclined
 		log.Printf("[CallManager] Call %s transitioning to Declined", callID)
+		callType := session.Type
+		callback := cm.onDeclined
+		cm.mu.Unlock()
+		if callback != nil {
+			callback(callID, callType)
+		}
 		return true
 	}
 
+	cm.mu.Unlock()
 	return false
 }
 

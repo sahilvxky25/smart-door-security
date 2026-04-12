@@ -190,7 +190,7 @@ func (d *DoorPeer) handleCallAccepted() {
 					// Audio command now writes to UDP instead of stdout pipe
 					audioCmd := exec.Command(ffmpegBin(), buildAudioArgs(audioDevice, localPort)...)
 					audioCmd.Stderr = os.Stderr // pipe FFmpeg audio logs to console
-					
+
 					if startErr := audioCmd.Start(); startErr == nil {
 						d.ffmpegProcs = append(d.ffmpegProcs, audioCmd)
 						go d.pumpAudioRTP(udpListener, audioTrack)
@@ -251,8 +251,24 @@ func (d *DoorPeer) handleCallAccepted() {
 		case pionwebrtc.ICEConnectionStateConnected:
 			log.Println("[DoorPeer] Call connected, streaming 2-way audio + 1-way video")
 		case pionwebrtc.ICEConnectionStateDisconnected,
-			pionwebrtc.ICEConnectionStateFailed:
+			pionwebrtc.ICEConnectionStateFailed,
+			pionwebrtc.ICEConnectionStateClosed:
 			d.sendJSON(signalingMsg{Type: "hangup"})
+			go func() {
+				d.mu.Lock()
+				defer d.mu.Unlock()
+				d.cleanupLocked()
+			}()
+		}
+	})
+
+	// Also tear down local capture when the peer connection itself closes.
+	pc.OnConnectionStateChange(func(state pionwebrtc.PeerConnectionState) {
+		log.Printf("[DoorPeer] Peer connection state: %s", state.String())
+		switch state {
+		case pionwebrtc.PeerConnectionStateDisconnected,
+			pionwebrtc.PeerConnectionStateFailed,
+			pionwebrtc.PeerConnectionStateClosed:
 			go func() {
 				d.mu.Lock()
 				defer d.mu.Unlock()
@@ -442,11 +458,11 @@ func (d *DoorPeer) playRemoteAudio(track *pionwebrtc.TrackRemote) {
 	// Start ffplay to decode OGG/Opus from stdin and play through speakers
 	playBin := ffplayBin()
 	playArgs := []string{
-		"-nodisp",        // no video window
-		"-autoexit",      // exit when stream ends
+		"-nodisp",   // no video window
+		"-autoexit", // exit when stream ends
 		"-loglevel", "error",
-		"-f", "ogg",      // input format: OGG container
-		"-i", "pipe:0",   // read from stdin
+		"-f", "ogg", // input format: OGG container
+		"-i", "pipe:0", // read from stdin
 	}
 
 	cmd := exec.Command(playBin, playArgs...)
@@ -693,7 +709,7 @@ func detectDShowDevices(prefVideo, prefAudio string) (video, audio string) {
 	re := regexp.MustCompile(`\]\s+"(.+?)"\s+\((video|audio)\)`)
 	altRe := regexp.MustCompile(`(?i)alternative name`)
 	legacyRe := regexp.MustCompile(`\]\s+"(.+)"`)
-	
+
 	section := "" // For legacy grouped formatting
 
 	for _, line := range strings.Split(string(out), "\n") {

@@ -54,10 +54,26 @@ class EventTile extends StatelessWidget {
         return Icons.person_off_outlined;
       case Event.typeForcedEntry:
         return Icons.warning_amber_rounded;
+      case Event.typeIntrusionCleared:
+        return Icons.shield_outlined;
       case Event.typeManualUnlock:
         return Icons.key_rounded;
+      case Event.typeManualLock:
+        return Icons.lock_outline_rounded;
       case Event.typeSpoofAttempt:
         return Icons.masks_outlined;
+      case Event.typeDoorOpened:
+        return Icons.door_front_door_outlined;
+      case Event.typeDoorClosed:
+        return Icons.door_front_door_outlined;
+      case Event.typeDoorLeftOpen:
+        return Icons.sensor_door_outlined;
+      case Event.typeVisitorApproaching:
+        return Icons.directions_walk_rounded;
+      case Event.typeHandleTamper:
+        return Icons.pan_tool_outlined;
+      case Event.typeMotorTamper:
+        return Icons.settings_input_component_outlined;
       default:
         return Icons.info_outline;
     }
@@ -71,10 +87,26 @@ class EventTile extends StatelessWidget {
         return AppColors.warning;
       case Event.typeForcedEntry:
         return AppColors.error;
+      case Event.typeIntrusionCleared:
+        return AppColors.success;
       case Event.typeManualUnlock:
+        return AppColors.purple;
+      case Event.typeManualLock:
         return AppColors.purple;
       case Event.typeSpoofAttempt:
         return const Color(0xFFE040FB);
+      case Event.typeDoorOpened:
+        return AppColors.warning;
+      case Event.typeDoorClosed:
+        return AppColors.success;
+      case Event.typeDoorLeftOpen:
+        return AppColors.error;
+      case Event.typeVisitorApproaching:
+        return AppColors.warning;
+      case Event.typeHandleTamper:
+        return AppColors.error;
+      case Event.typeMotorTamper:
+        return AppColors.error;
       default:
         return AppColors.textMuted;
     }

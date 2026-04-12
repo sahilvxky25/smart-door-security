@@ -9,12 +9,13 @@ import (
 	"time"
 
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/api"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/calls"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/config"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/database"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/flows"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/models"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/mqtt"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/services"
-	"github.com/gottatouchsomegrass/smart-door-backend/internal/calls"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/storage"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/webrtc"
 	// "github.com/gottatouchsomegrass/smart-door-backend/internal/controllers"
@@ -66,36 +67,43 @@ func main() {
 	go doorPeer.Run()
 
 	// (Services initialization continued...)
-	
-	eventService        := services.NewEventService(db)
+
+	eventService := services.NewEventService(db)
 	eventService.OnEventCreated = func(event *models.Event) {
 		signalingHub.BroadcastEventUpdate(event.EventType)
 	}
 	eventService.GetActiveOwner = signalingHub.GetActiveOwnerID
-	authService         := services.NewAuthService(db, cfg.JWT_SECRET)
-	doorService         := services.NewDoorService(mqttClient, eventService)
-	faceService         := services.NewFaceService(cfg.FACE_SERVICE_URL)
-	soundService        := services.NewSoundService()
+	securityState := services.NewSecurityStateService()
+	authService := services.NewAuthService(db, cfg.JWT_SECRET)
+	doorService := services.NewDoorService(mqttClient, eventService, securityState)
+	faceService := services.NewFaceService(cfg.FACE_SERVICE_URL)
+	soundService := services.NewSoundService()
 	notificationService := services.NewNotificationService(signalingHub, callManager, db)
-	vibrationService    := services.NewVibrationService(db, eventService, soundService, notificationService, doorService)
-	cameraService       := services.NewCameraService(faceService, doorService, eventService, mediaStore, mqttClient, db, notificationService, soundService)
-	cameraService.SetCallActiveCheckFn(doorPeer.IsCallActive)
-	proximityService    := services.NewProximityService(db, mqttClient, eventService, notificationService)
-	ultrasonicService   := services.NewUltrasonicService(db, mqttClient, eventService, cameraService, notificationService)
-	cameraService.SetUltrasonicService(ultrasonicService)
-	magneticService     := services.NewMagneticService(db, eventService, doorService, soundService, notificationService)
-	motorService        := services.NewMotorService(doorService, eventService, soundService, notificationService)
+	proximityService := services.NewProximityService(db, mqttClient, eventService, notificationService)
+	ultrasonicService := services.NewUltrasonicService(db, mqttClient, eventService, notificationService)
+	motorService := services.NewMotorService(doorService, eventService, soundService, notificationService)
+	visitorAuthFlow := flows.NewVisitorAuthFlow(faceService, doorService, securityState, eventService, mediaStore, mqttClient, notificationService, soundService, ultrasonicService, doorPeer.IsCallActive)
+	intrusionFlow := flows.NewIntrusionFlow(doorService, securityState, eventService, faceService, mediaStore, soundService, notificationService)
+	callManager.SetOnDeclinedCall(func(callID string, callType string) {
+		if callType != models.EventForcedEntry {
+			return
+		}
+		log.Printf("[Main] Forced-entry call %s declined by owner -> locking door and clearing intrusion", callID)
+		doorService.LockDoor()
+		if securityState.ClearIntrusion("forced-entry call declined") {
+			eventService.LogEvent(models.EventIntrusionCleared, "")
+		}
+	})
 
 	// Start MQTT subscribers
-	mqtt.StartSubscribers(mqttClient, cameraService, vibrationService, proximityService, ultrasonicService, magneticService, motorService)
+	mqtt.StartSubscribers(mqttClient, visitorAuthFlow, intrusionFlow, proximityService, ultrasonicService, motorService)
 
 	// Initialize API router
 	router := api.NewRouter(
 		db,
 		authService,
 		doorService,
-		cameraService,
-		vibrationService,
+		securityState,
 		notificationService,
 		faceService,
 		eventService,

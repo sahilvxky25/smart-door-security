@@ -32,55 +32,69 @@ class _CallScreenState extends State<CallScreen> {
                 )
               else
                 GradientBackground(
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 80,
-                          height: 80,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: AppColors.purpleSurface,
-                            boxShadow: [
-                              BoxShadow(
-                                color: AppColors.purpleGlow,
-                                blurRadius: 30,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (call.incomingImageUrl != null &&
+                          call.incomingImageUrl!.isNotEmpty)
+                        Image.network(
+                          call.incomingImageUrl!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                        ),
+                      Container(color: Colors.black54),
+                      Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 80,
+                              height: 80,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: AppColors.purpleSurface,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: AppColors.purpleGlow,
+                                    blurRadius: 30,
+                                  ),
+                                ],
+                              ),
+                              child: const Icon(Icons.videocam_rounded,
+                                  color: AppColors.purple, size: 36),
+                            ),
+                            const SizedBox(height: 20),
+                            Text(
+                              _statusText(call.state),
+                              style: const TextStyle(
+                                color: AppColors.textPrimary,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (call.errorMessage != null) ...[
+                              const SizedBox(height: 8),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 32),
+                                child: Text(
+                                  call.errorMessage!,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                      color: AppColors.error, fontSize: 13),
+                                ),
                               ),
                             ],
-                          ),
-                          child: const Icon(Icons.videocam_rounded,
-                              color: AppColors.purple, size: 36),
+                            if (call.state == CallState.connecting ||
+                                call.state == CallState.requesting)
+                              const Padding(
+                                padding: EdgeInsets.only(top: 20),
+                                child: CircularProgressIndicator(),
+                              ),
+                          ],
                         ),
-                        const SizedBox(height: 20),
-                        Text(
-                          _statusText(call.state),
-                          style: const TextStyle(
-                            color: AppColors.textPrimary,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        if (call.errorMessage != null) ...[
-                          const SizedBox(height: 8),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 32),
-                            child: Text(
-                              call.errorMessage!,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                  color: AppColors.error, fontSize: 13),
-                            ),
-                          ),
-                        ],
-                        if (call.state == CallState.connecting ||
-                            call.state == CallState.requesting)
-                          const Padding(
-                            padding: EdgeInsets.only(top: 20),
-                            child: CircularProgressIndicator(),
-                          ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
 

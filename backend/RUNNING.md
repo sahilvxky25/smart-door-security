@@ -68,7 +68,7 @@ go mod download
 ### 5. Run the Server
 
 ```bash
-go run ./cmd/server/main.go
+air
 ```
 
 The API will be available at `http://localhost:8080`.

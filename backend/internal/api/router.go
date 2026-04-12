@@ -31,8 +31,7 @@ func NewRouter(
 	db *gorm.DB,
 	auth *services.AuthService,
 	door *services.DoorService,
-	camera *services.CameraService,
-	vibration *services.VibrationService,
+	securityState *services.SecurityStateService,
 	notify *services.NotificationService,
 	face *services.FaceService,
 	eventService *services.EventService,
@@ -58,9 +57,10 @@ func NewRouter(
 	authGroup.Use(middleware.RequireAuth(jwtSecret))
 
 	// Door control
-	authGroup.POST("/door/unlock", unlockDoorManual(door, eventService))
-	authGroup.POST("/door/lock", lockDoor(door, eventService))
+	authGroup.POST("/door/unlock", unlockDoorManual(door, eventService, securityState))
+	authGroup.POST("/door/lock", lockDoor(door, eventService, securityState))
 	authGroup.GET("/door/state", getDoorState(door))
+	authGroup.POST("/security/clear-intrusion", clearIntrusion(securityState, eventService))
 
 	authGroup.GET("/users", showUsersHandler(db))
 	authGroup.POST("/users", createUserHandler(db))
@@ -163,15 +163,20 @@ func healthCheck(c *gin.Context) {
 
 // unlockDoorManual godoc
 // @Summary Unlock door (manual)
-// @Description Sends an MQTT UNLOCK command to the servo and auto-locks after 5 s. Logs a MANUAL_UNLOCK event.
+// @Description Sends an MQTT UNLOCK command to the servo and auto-locks after 15 s. Logs a MANUAL_UNLOCK event.
 // @Tags door
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {object} map[string]string
 // @Failure 401 {object} map[string]string
 // @Router /door/unlock [post]
-func unlockDoorManual(door *services.DoorService, events *services.EventService) gin.HandlerFunc {
+func unlockDoorManual(door *services.DoorService, events *services.EventService, securityState *services.SecurityStateService) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if securityState != nil {
+			if securityState.ClearIntrusion("manual owner unlock") {
+				events.LogEvent(models.EventIntrusionCleared, "")
+			}
+		}
 		door.UnlockDoor()
 		events.LogEvent(models.EventManualUnlock, "")
 		c.JSON(200, gin.H{"status": "door unlocked"})
@@ -187,11 +192,36 @@ func unlockDoorManual(door *services.DoorService, events *services.EventService)
 // @Success 200 {object} map[string]string
 // @Failure 401 {object} map[string]string
 // @Router /door/lock [post]
-func lockDoor(door *services.DoorService, events *services.EventService) gin.HandlerFunc {
+func lockDoor(door *services.DoorService, events *services.EventService, securityState *services.SecurityStateService) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if securityState != nil {
+			if securityState.ClearIntrusion("manual owner lock") {
+				events.LogEvent(models.EventIntrusionCleared, "")
+			}
+		}
 		door.LockDoor()
 		events.LogEvent(models.EventManualLock, "")
 		c.JSON(200, gin.H{"status": "door locked"})
+	}
+}
+
+// clearIntrusion godoc
+// @Summary Clear intrusion state
+// @Description Clears the active intrusion lockout so visitor authentication can resume.
+// @Tags security
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Router /security/clear-intrusion [post]
+func clearIntrusion(securityState *services.SecurityStateService, events *services.EventService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if securityState != nil {
+			if securityState.ClearIntrusion("manual owner clear") {
+				events.LogEvent(models.EventIntrusionCleared, "")
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "intrusion cleared"})
 	}
 }
 
@@ -239,8 +269,8 @@ func showUsersHandler(db *gorm.DB) gin.HandlerFunc {
 
 // CreateUserRequest represents the request body for creating a user
 type CreateUserRequest struct {
-	Name  string `json:"name" binding:"required"`
-	Email string `json:"email" binding:"required"`
+	Name     string `json:"name" binding:"required"`
+	Email    string `json:"email" binding:"required"`
 	Password string `json:"password" binding:"required"`
 }
 
@@ -455,4 +485,3 @@ func signInHandler(auth *services.AuthService) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{"token": token, "user": user})
 	}
 }
-

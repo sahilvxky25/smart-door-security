@@ -75,6 +75,7 @@ erDiagram
 | `EventAuthorizedEntry`    | `AUTHORIZED_ENTRY`    | Recognized family member entered   |
 | `EventUnknownVisitor`     | `UNKNOWN_VISITOR`     | Unrecognized face detected         |
 | `EventForcedEntry`        | `FORCED_ENTRY`        | Door forced open without auth      |
+| `EventIntrusionCleared`   | `INTRUSION_CLEARED`   | Intrusion state manually or automatically cleared |
 | `EventManualUnlock`       | `MANUAL_UNLOCK`       | Door unlocked manually via app     |
 | `EventSpoofAttempt`       | `SPOOF_ATTEMPT`       | Spoofing / liveness check failure  |
 | `EventDoorOpened`         | `DOOR_OPENED`         | Door physically opened             |
