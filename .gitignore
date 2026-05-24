@@ -1,1 +1,10 @@
-backend/.env
+# Environment variables
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Service account credentials
+firebase-adminsdk*.json
+service-account*.json
+google-services.json

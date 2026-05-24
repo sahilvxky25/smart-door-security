@@ -8,11 +8,24 @@ import '../models/family_member.dart';
 class ApiService {
   String baseUrl;
   String? token;
+  Future<void> Function()? onUnauthorized;
+  bool _isHandlingUnauthorized = false;
 
   ApiService({required this.baseUrl});
 
   Map<String, String> get _authHeaders =>
       token != null ? {'Authorization': 'Bearer $token'} : {};
+
+  Future<void> _handleUnauthorized(http.Response resp) async {
+    if (resp.statusCode != 401 || token == null) return;
+    if (_isHandlingUnauthorized) return;
+    _isHandlingUnauthorized = true;
+    try {
+      await onUnauthorized?.call();
+    } finally {
+      _isHandlingUnauthorized = false;
+    }
+  }
 
   Future<bool> getHealth() async {
     try {
@@ -64,6 +77,10 @@ class ApiService {
       Uri.parse('$baseUrl/door/unlock'),
       headers: _authHeaders,
     );
+    await _handleUnauthorized(resp);
+    if (resp.statusCode == 401) {
+      throw Exception('Session expired. Please sign in again.');
+    }
     final body = jsonDecode(resp.body);
     return body['status'] as String;
   }
@@ -73,6 +90,10 @@ class ApiService {
       Uri.parse('$baseUrl/door/lock'),
       headers: _authHeaders,
     );
+    await _handleUnauthorized(resp);
+    if (resp.statusCode == 401) {
+      throw Exception('Session expired. Please sign in again.');
+    }
     final body = jsonDecode(resp.body);
     return body['status'] as String;
   }
@@ -82,6 +103,10 @@ class ApiService {
       Uri.parse('$baseUrl/door/state'),
       headers: _authHeaders,
     );
+    await _handleUnauthorized(resp);
+    if (resp.statusCode == 401) {
+      throw Exception('Session expired. Please sign in again.');
+    }
     if (resp.statusCode != 200) {
       throw Exception('Failed to fetch door state');
     }
@@ -95,6 +120,10 @@ class ApiService {
       Uri.parse('$baseUrl/events'),
       headers: _authHeaders,
     );
+    await _handleUnauthorized(resp);
+    if (resp.statusCode == 401) {
+      throw Exception('Session expired. Please sign in again.');
+    }
     if (resp.statusCode != 200) {
       throw Exception('Failed to fetch events: ${resp.statusCode}');
     }
@@ -108,6 +137,10 @@ class ApiService {
       Uri.parse('$baseUrl/events/$id'),
       headers: _authHeaders,
     );
+    await _handleUnauthorized(resp);
+    if (resp.statusCode == 401) {
+      throw Exception('Session expired. Please sign in again.');
+    }
     if (resp.statusCode != 200) {
       throw Exception('Event not found');
     }
@@ -122,6 +155,10 @@ class ApiService {
       Uri.parse('$baseUrl/family'),
       headers: _authHeaders,
     );
+    await _handleUnauthorized(resp);
+    if (resp.statusCode == 401) {
+      throw Exception('Session expired. Please sign in again.');
+    }
     if (resp.statusCode != 200) {
       throw Exception('Failed to fetch family members: ${resp.statusCode}');
     }
@@ -138,6 +175,10 @@ class ApiService {
       headers: {'Content-Type': 'application/json', ..._authHeaders},
       body: jsonEncode({'name': name}),
     );
+    await _handleUnauthorized(resp);
+    if (resp.statusCode == 401) {
+      throw Exception('Session expired. Please sign in again.');
+    }
     if (resp.statusCode == 409) {
       throw Exception('A member named "$name" already exists');
     }
@@ -154,6 +195,10 @@ class ApiService {
       Uri.parse('$baseUrl/family/$id'),
       headers: _authHeaders,
     );
+    await _handleUnauthorized(resp);
+    if (resp.statusCode == 401) {
+      throw Exception('Session expired. Please sign in again.');
+    }
     if (resp.statusCode != 200) {
       throw Exception('Failed to delete member');
     }
@@ -179,6 +224,10 @@ class ApiService {
     );
     final streamed = await request.send();
     final resp = await http.Response.fromStream(streamed);
+    await _handleUnauthorized(resp);
+    if (resp.statusCode == 401) {
+      throw Exception('Session expired. Please sign in again.');
+    }
     if (resp.statusCode == 422) {
       final body = jsonDecode(resp.body);
       throw Exception(body['error'] ?? 'Face enrollment failed');
@@ -196,6 +245,10 @@ class ApiService {
       Uri.parse('$baseUrl/family/$id/enroll'),
       headers: _authHeaders,
     );
+    await _handleUnauthorized(resp);
+    if (resp.statusCode == 401) {
+      throw Exception('Session expired. Please sign in again.');
+    }
     if (resp.statusCode != 200) {
       throw Exception('Failed to unenroll face');
     }
@@ -220,6 +273,10 @@ class ApiService {
     );
     final streamed = await request.send();
     final resp = await http.Response.fromStream(streamed);
+    await _handleUnauthorized(resp);
+    if (resp.statusCode == 401) {
+      throw Exception('Session expired. Please sign in again.');
+    }
     if (resp.statusCode != 200) {
       final body = jsonDecode(resp.body);
       throw Exception(body['error'] ?? 'Upload failed');
@@ -234,6 +291,10 @@ class ApiService {
       headers: {'Content-Type': 'application/json', ..._authHeaders},
       body: jsonEncode({'token': token}),
     );
+    await _handleUnauthorized(resp);
+    if (resp.statusCode == 401) {
+      throw Exception('Session expired. Please sign in again.');
+    }
     if (resp.statusCode != 200) {
       throw Exception('Failed to update FCM token');
     }

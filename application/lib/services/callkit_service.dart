@@ -19,7 +19,7 @@ class CallKitService {
       avatar: imageUrl,
       handle: body ?? 'Incoming Video Call',
       type: 0, // Audio/Video toggle depends on platform support
-      duration: 60000,
+      duration: 45000,
       textAccept: 'Accept',
       textDecline: 'Decline',
       missedCallNotification: const NotificationParams(
@@ -34,7 +34,7 @@ class CallKitService {
         isCustomNotification: true,
         isShowCallID: true,
         isShowLogo: false,
-        ringtonePath: 'makabhosda_aag',
+        ringtonePath: 'ringtone_default', //makabhosda_aag
         backgroundColor: '#09121C',
         backgroundUrl: 'https://dummyimage.com/1x1/000000/000000.png',
         actionColor: '#4CAF50',

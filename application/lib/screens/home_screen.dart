@@ -177,6 +177,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     fontSize: 13,
                   ),
                 ),
+                if ((auth.user?.familyMemberName ?? '').isNotEmpty)
+                  Text(
+                    'Family Member: ${auth.user!.familyMemberName}',
+                    style: const TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 12,
+                    ),
+                  ),
               ],
             ),
           ),

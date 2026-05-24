@@ -24,5 +24,6 @@ type Event struct {
 	EventType string    `json:"event_type"`
 	UserID    uint      `gorm:"not null" json:"user_id"`
 	User      *User     `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	FamilyMember string `json:"family_member,omitempty"`
 	ImageURL  string    `json:"image_url"`
 }

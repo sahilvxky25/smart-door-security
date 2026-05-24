@@ -220,6 +220,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         fontSize: 14,
                       ),
                     ),
+                    if ((user?.familyMemberName ?? '').isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Family Member: ${user!.familyMemberName}',
+                        style: const TextStyle(
+                          color: AppColors.textMuted,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
                     if (user != null) ...[
                       const SizedBox(height: 4),
                       Text(

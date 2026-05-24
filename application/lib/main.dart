@@ -123,6 +123,13 @@ class MyApp extends StatelessWidget {
       ],
       child: Builder(
         builder: (context) {
+          apiService.onUnauthorized = () async {
+            final auth = context.read<AuthProvider>();
+            final signaling = context.read<SignalingProvider>();
+            signaling.disconnect();
+            await auth.signOutToLogin(apiService, MyApp.navigatorKey);
+          };
+
           // Restore auth session, then connect WebSocket if authenticated
           WidgetsBinding.instance.addPostFrameCallback((_) async {
             // Capture providers before the async gap.
@@ -164,6 +171,8 @@ class MyApp extends StatelessWidget {
     switch (settings.name) {
       case '/login':
         return MaterialPageRoute(builder: (_) => const LoginScreen());
+      case '/home':
+        return MaterialPageRoute(builder: (_) => const HomeScreen());
       case '/events':
         return MaterialPageRoute(builder: (_) => const EventsScreen());
       case '/event':

@@ -45,6 +45,7 @@ DB_URL=postgres://postgres:dipu123@localhost:5432/smartdoor
 MQTT_BROKER=tcp://localhost:1883
 PORT=8080
 JWT_SECRET=supersecret
+DOOR_OWNER_USER_ID=1
 ```
 
 > Change `DB_URL` credentials if your PostgreSQL setup differs.
@@ -133,3 +134,4 @@ docs/               # Auto-generated Swagger docs
 | `MQTT_BROKER` | MQTT broker address             | `tcp://localhost:1883`                          |
 | `PORT`        | HTTP server port                | `8080`                                          |
 | `JWT_SECRET`  | Secret key used for JWT signing | `supersecret`                                   |
+| `DOOR_OWNER_USER_ID` | Optional fixed owner for the physical door; visitor face recognition is scoped to this user when set | `1` |

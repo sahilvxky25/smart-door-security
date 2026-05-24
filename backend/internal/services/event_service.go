@@ -26,6 +26,10 @@ func NewEventService(db *gorm.DB) *EventService {
 }
 
 func (e *EventService) LogEvent(eventType string, imageURL string) (*models.Event, error) {
+	return e.LogEventWithFamilyMember(eventType, imageURL, "")
+}
+
+func (e *EventService) LogEventWithFamilyMember(eventType string, imageURL string, familyMember string) (*models.Event, error) {
 	userID, err := e.resolveEventUserID(eventType)
 	if err != nil {
 		return nil, err
@@ -35,6 +39,7 @@ func (e *EventService) LogEvent(eventType string, imageURL string) (*models.Even
 		Timestamp: time.Now(),
 		EventType: eventType,
 		UserID:    userID,
+		FamilyMember: familyMember,
 		ImageURL:  imageURL,
 	}
 
@@ -43,7 +48,7 @@ func (e *EventService) LogEvent(eventType string, imageURL string) (*models.Even
 		return nil, err
 	}
 
-	log.Printf("[EventService] Created event: type=%s userID=%v imageURL=%s", eventType, userID, imageURL)
+	log.Printf("[EventService] Created event: type=%s userID=%v familyMember=%q imageURL=%s", eventType, userID, familyMember, imageURL)
 
 	if e.OnEventCreated != nil {
 		e.OnEventCreated(&event)

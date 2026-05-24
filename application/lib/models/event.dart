@@ -20,6 +20,7 @@ class Event {
   final String eventType;
   final int userId;
   final User? user;
+  final String? familyMember;
   final String imageUrl;
 
   Event({
@@ -28,6 +29,7 @@ class Event {
     required this.eventType,
     required this.userId,
     this.user,
+    this.familyMember,
     required this.imageUrl,
   });
 
@@ -38,6 +40,7 @@ class Event {
       eventType: json['event_type'] as String,
       userId: json['user_id'] as int,
       user: json['user'] != null ? User.fromJson(json['user']) : null,
+      familyMember: (json['family_member'] as String?) ?? '',
       imageUrl: (json['image_url'] as String?) ?? '',
     );
   }

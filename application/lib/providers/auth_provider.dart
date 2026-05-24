@@ -21,10 +21,18 @@ class AuthProvider extends ChangeNotifier {
     final id = prefs.getInt('user_id');
     final name = prefs.getString('user_name') ?? '';
     final email = prefs.getString('user_email') ?? '';
+    final familyMemberName = prefs.getString('user_family_member_name');
     final photoUrl = prefs.getString('user_photo_url');
     if (token != null && id != null) {
       _token = token;
-      _user = User(id: id, name: name, email: email, photoUrl: photoUrl, createdAt: DateTime.now());
+      _user = User(
+        id: id,
+        name: name,
+        email: email,
+        familyMemberName: familyMemberName,
+        photoUrl: photoUrl,
+        createdAt: DateTime.now(),
+      );
       api.token = token;
     }
     _loading = false;
@@ -37,7 +45,12 @@ class AuthProvider extends ChangeNotifier {
     try {
       final result = await api.signIn(name, password);
       _token = result['token'] as String;
-      _user = User.fromJson(result['user'] as Map<String, dynamic>);
+      final userJson = Map<String, dynamic>.from(
+        result['user'] as Map<String, dynamic>,
+      );
+      userJson['family_member_name'] ??=
+          result['family_member_name'] ?? result['family_member'];
+      _user = User.fromJson(userJson);
       api.token = _token!;
       await _save();
       notifyListeners();
@@ -60,7 +73,12 @@ class AuthProvider extends ChangeNotifier {
     try {
       final result = await api.signUp(name, email, password);
       _token = result['token'] as String;
-      _user = User.fromJson(result['user'] as Map<String, dynamic>);
+      final userJson = Map<String, dynamic>.from(
+        result['user'] as Map<String, dynamic>,
+      );
+      userJson['family_member_name'] ??=
+          result['family_member_name'] ?? result['family_member'];
+      _user = User.fromJson(userJson);
       api.token = _token!;
       await _save();
       notifyListeners();
@@ -79,6 +97,7 @@ class AuthProvider extends ChangeNotifier {
       id: _user!.id,
       name: _user!.name,
       email: _user!.email,
+      familyMemberName: _user!.familyMemberName,
       photoUrl: url,
       createdAt: _user!.createdAt,
     );
@@ -96,8 +115,17 @@ class AuthProvider extends ChangeNotifier {
     await prefs.remove('user_id');
     await prefs.remove('user_name');
     await prefs.remove('user_email');
+    await prefs.remove('user_family_member_name');
     await prefs.remove('user_photo_url');
     notifyListeners();
+  }
+
+  Future<void> signOutToLogin(
+    ApiService api,
+    GlobalKey<NavigatorState> navigatorKey,
+  ) async {
+    await signOut(api);
+    navigatorKey.currentState?.pushNamedAndRemoveUntil('/login', (_) => false);
   }
 
   Future<void> _save() async {
@@ -106,6 +134,15 @@ class AuthProvider extends ChangeNotifier {
     await prefs.setInt('user_id', _user!.id);
     await prefs.setString('user_name', _user!.name);
     await prefs.setString('user_email', _user!.email);
+    if (_user!.familyMemberName != null &&
+        _user!.familyMemberName!.isNotEmpty) {
+      await prefs.setString(
+        'user_family_member_name',
+        _user!.familyMemberName!,
+      );
+    } else {
+      await prefs.remove('user_family_member_name');
+    }
     if (_user!.photoUrl != null) {
       await prefs.setString('user_photo_url', _user!.photoUrl!);
     } else {

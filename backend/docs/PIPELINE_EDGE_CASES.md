@@ -35,11 +35,24 @@ This file documents the current backend behavior after the flow refactor.
 - `IntrusionFlow` suppresses duplicate vibration-triggered calls while a forced-entry call is already live.
 - `VisitorAuthFlow` suppresses duplicate unknown-visitor and spoof-attempt calls by event type.
 
-6. Declined vibration calls re-arm future vibration incidents.
+6. Visitor authentication is single-flight.
+
+- `VisitorAuthFlow` keeps one active PIR authentication flow at a time.
+- Additional PIR triggers are skipped while the current flow is waiting for or handling the face-auth response.
+
+7. Visitor authentication is scoped to one owner.
+
+- Family enrollment sends `user_id`, `member_id`, and the Cloudinary URL to the face service.
+- The backend stores generated embeddings in the `face_embeddings` table under `user_id` and `family_member_id`.
+- During PIR auth, the backend sends only the resolved owner's candidate embeddings to the face service for comparison.
+- The face service still has scoped in-memory/pickle endpoints for compatibility, but backend authorization uses the database as the source of truth.
+- Until MQTT topics include a real `device_id`, the owner context comes from `DOOR_OWNER_USER_ID` when configured, otherwise from the active owner WebSocket session.
+
+8. Declined vibration calls re-arm future vibration incidents.
 
 - If the previous forced-entry call from vibration was declined, the next vibration can still create a new call after debounce.
 
-7. Manual owner actions clear intrusion state.
+9. Manual owner actions clear intrusion state.
 
 - `POST /door/unlock` clears intrusion before unlocking.
 - `POST /door/lock` clears intrusion before locking.

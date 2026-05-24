@@ -105,6 +105,25 @@ erDiagram
 
 ---
 
+### `face_embeddings`
+
+| Column             | Type        | Constraints                                      | JSON Key | Notes |
+|--------------------|-------------|--------------------------------------------------|----------|-------|
+| `id`               | `uint`      | `PRIMARY KEY`                                    | `id`     | Auto-increment |
+| `user_id`          | `uint`      | `NOT NULL`, `UNIQUE INDEX (user_id, family_member_id)` | `user_id` | Owner scope for recognition |
+| `family_member_id` | `uint`      | `NOT NULL`, `UNIQUE INDEX (user_id, family_member_id)` | `family_member_id` | Family member represented by this embedding |
+| `name`             | `string`    | `NOT NULL`                                       | `name`   | Snapshot of the display name used in recognition responses |
+| `image_url`        | `string`    |                                                  | `image_url` | Cloudinary enrollment image URL |
+| `embedding_json`   | `text`      | `NOT NULL`                                       | *(hidden)* | FaceNet embedding stored as a JSON float array |
+| `created_at`       | `timestamp` |                                                  | `created_at` | |
+| `updated_at`       | `timestamp` |                                                  | `updated_at` | |
+
+`face_embeddings` is the backend source of truth for authorization. The Python face service generates embeddings and performs model inference, but PIR recognition uses only the candidate embeddings loaded from this table for the resolved owner.
+
+**Source**: [`face_embedding.go`](file:///c:/Users/Dipankar%20Ghosh/Coding/smart-door-security/backend/internal/models/face_embedding.go)
+
+---
+
 ## Placeholder Models (Empty)
 
 The following model files exist but contain no struct definitions yet:

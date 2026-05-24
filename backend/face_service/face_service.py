@@ -16,23 +16,19 @@ from anti_spoof import AntiSpoof
 
 app = Flask(__name__)
 
-# Prevents concurrent camera access from overlapping PIR triggers
+# Prevents concurrent camera access from overlapping PIR triggers.
 camera_lock = threading.Lock()
-# Protects known_faces dict from concurrent enrollment/recognition
+# Protects known_faces from concurrent enrollment/recognition.
 faces_lock = threading.RLock()
 
 KNOWN_FACES_DIR = "face_service/known_faces"
 EMBEDDINGS_FILE = "face_service/embeddings.pkl"
-MATCH_THRESHOLD = 0.65  # cosine similarity for FaceNet embeddings
-CAPTURE_DURATION = 2.5  # seconds of video to capture for liveness
-CAPTURE_FPS = 12  # target frame rate during capture
+MATCH_THRESHOLD = 0.65
+CAPTURE_DURATION = 2.5
+CAPTURE_FPS = 12
 
-# Allowed name characters: letters, digits, spaces, hyphens, underscores
-_NAME_RE = re.compile(r'^[\w\s\-]{1,64}$')
+_NAME_RE = re.compile(r"^[\w\s\-]{1,64}$")
 
-# ----------------------------
-# INITIALIZE MODELS
-# ----------------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 mtcnn = MTCNN(
@@ -42,7 +38,6 @@ mtcnn = MTCNN(
     device=device,
 )
 
-# MTCNN with keep_all=True to detect multiple faces (used in enrollment validation)
 mtcnn_all = MTCNN(
     image_size=160,
     margin=20,
@@ -51,50 +46,90 @@ mtcnn_all = MTCNN(
 )
 
 facenet = InceptionResnetV1(pretrained="vggface2").eval().to(device)
-
 anti_spoof = AntiSpoof()
 
-# Store {name: 512-d embedding tensor}
+# {user_id: {member_id: {"embedding": tensor, "name": str, "member_id": str}}}
 known_faces = {}
 
 
-# ----------------------------
-# PERSISTENCE
-# ----------------------------
+def normalize_id(value):
+    return str(value or "").strip()
+
+
+def parse_legacy_face_name(name):
+    parts = str(name).split("_", 1)
+    if len(parts) == 2 and parts[0].isdigit():
+        return parts[0], str(name), parts[1]
+    return "legacy", str(name), str(name)
+
+
 def save_embeddings():
-    """Persist embeddings dict to disk."""
     try:
         with faces_lock:
-            data = {name: emb.cpu() for name, emb in known_faces.items()}
+            data = {}
+            for user_id, faces in known_faces.items():
+                data[str(user_id)] = {}
+                for member_id, record in faces.items():
+                    data[str(user_id)][str(member_id)] = {
+                        "embedding": record["embedding"].detach().cpu(),
+                        "name": record.get("name", ""),
+                        "member_id": str(record.get("member_id", member_id)),
+                    }
+
         with open(EMBEDDINGS_FILE, "wb") as f:
             pickle.dump(data, f)
-        print(f"[FaceService] Saved {len(data)} embeddings to {EMBEDDINGS_FILE}")
+
+        total = sum(len(faces) for faces in data.values())
+        print(f"[FaceService] Saved {total} scoped embeddings to {EMBEDDINGS_FILE}")
     except Exception as e:
         print(f"[FaceService] WARNING: failed to save embeddings: {e}")
 
 
 def load_known_faces():
-    """Load embeddings from pickle (fast) or fall back to directory scan."""
     os.makedirs(KNOWN_FACES_DIR, exist_ok=True)
 
-    # Try loading from pickle first
     if os.path.exists(EMBEDDINGS_FILE):
         try:
             with open(EMBEDDINGS_FILE, "rb") as f:
                 data = pickle.load(f)
+
             with faces_lock:
-                for name, emb in data.items():
-                    known_faces[name] = emb.to(device)
-            print(f"[FaceService] Loaded {len(known_faces)} embeddings from pickle")
+                for key, value in data.items():
+                    if isinstance(value, dict):
+                        for member_id, record in value.items():
+                            if isinstance(record, dict) and "embedding" in record:
+                                embedding = record["embedding"]
+                                name = record.get("name", str(member_id))
+                                stored_member_id = normalize_id(record.get("member_id")) or str(member_id)
+                            else:
+                                embedding = record
+                                name = str(member_id)
+                                stored_member_id = str(member_id)
+
+                            known_faces.setdefault(str(key), {})[stored_member_id] = {
+                                "embedding": embedding.to(device),
+                                "name": name,
+                                "member_id": stored_member_id,
+                            }
+                    else:
+                        user_id, member_id, name = parse_legacy_face_name(key)
+                        known_faces.setdefault(user_id, {})[member_id] = {
+                            "embedding": value.to(device),
+                            "name": name,
+                            "member_id": member_id,
+                        }
+
+            total = sum(len(faces) for faces in known_faces.values())
+            print(f"[FaceService] Loaded {total} scoped embeddings from pickle")
             return
         except Exception as e:
             print(f"[FaceService] Pickle load failed ({e}), falling back to directory scan")
 
-    # Fall back to scanning known_faces directory
     loaded = 0
     for filename in os.listdir(KNOWN_FACES_DIR):
         if not filename.lower().endswith((".jpg", ".jpeg", ".png")):
             continue
+
         path = os.path.join(KNOWN_FACES_DIR, filename)
         try:
             image = Image.open(path).convert("RGB")
@@ -102,76 +137,197 @@ def load_known_faces():
             if face_tensor is None:
                 print(f"[FaceService] WARNING: no face detected in {filename}, skipping")
                 continue
+
             with torch.no_grad():
-                embedding = facenet(face_tensor.unsqueeze(0).to(device))
+                embedding = facenet(face_tensor.unsqueeze(0).to(device))[0]
+
             name = os.path.splitext(filename)[0]
+            user_id, member_id, display_name = parse_legacy_face_name(name)
             with faces_lock:
-                known_faces[name] = embedding[0]
+                known_faces.setdefault(user_id, {})[member_id] = {
+                    "embedding": embedding,
+                    "name": display_name,
+                    "member_id": member_id,
+                }
             loaded += 1
-            print(f"[FaceService] Loaded: {name} (from {filename})")
+            print(f"[FaceService] Loaded user={user_id} member={member_id} from {filename}")
         except Exception as e:
             print(f"[FaceService] WARNING: failed to load {filename}: {e}")
 
-    print(f"[FaceService] {len(known_faces)} known faces ready: {list(known_faces.keys())}")
+    total = sum(len(faces) for faces in known_faces.values())
+    print(f"[FaceService] {total} known faces ready across {len(known_faces)} users")
     if loaded > 0:
         save_embeddings()
 
 
-# ----------------------------
-# COSINE SIMILARITY
-# ----------------------------
 def cosine_similarity(a, b):
     return float(torch.nn.functional.cosine_similarity(a.unsqueeze(0), b.unsqueeze(0)))
 
 
-# ----------------------------
-# RECOGNIZE FACE
-# ----------------------------
-def recognize_face(frame):
-    """Run MTCNN + FaceNet on a single frame.
-    Returns (matched, name)."""
+def embedding_to_list(embedding):
+    return [float(x) for x in embedding.detach().cpu().tolist()]
+
+
+def embedding_from_list(values):
+    return torch.tensor(values, dtype=torch.float32, device=device)
+
+
+def load_image_from_url(url):
+    resp = http_requests.get(url, timeout=10)
+    resp.raise_for_status()
+    if not resp.content:
+        raise ValueError("downloaded image is empty")
+
+    img_array = np.asarray(bytearray(resp.content), dtype=np.uint8)
+    image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("could not decode downloaded image")
+    return image
+
+
+def validate_single_face_and_embed(frame):
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    pil_image = Image.fromarray(rgb)
+
+    all_faces = mtcnn_all(pil_image)
+    if all_faces is None:
+        return None, ("no face detected in the provided image", 422)
+
+    if isinstance(all_faces, list) or (
+        hasattr(all_faces, "shape") and all_faces.ndim == 4 and all_faces.shape[0] > 1
+    ):
+        n = all_faces.shape[0] if hasattr(all_faces, "shape") else len(all_faces)
+        if n > 1:
+            return None, (f"multiple faces detected ({n}); provide exactly one face", 422)
+
+    face_tensor = mtcnn(pil_image)
+    if face_tensor is None:
+        return None, ("face detection failed; image may be blurry or face too small", 422)
+
+    with torch.no_grad():
+        embedding = facenet(face_tensor.unsqueeze(0).to(device))[0]
+    return embedding, None
+
+
+def enroll_frame(user_id, member_id, name, frame):
+    user_id = normalize_id(user_id)
+    member_id = normalize_id(member_id)
+    name = (name or "").strip()
+
+    if not user_id:
+        return None, ("user_id is required", 400)
+    if not member_id:
+        return None, ("member_id is required", 400)
+    if not name:
+        return None, ("name is required", 400)
+    if not _NAME_RE.match(name):
+        return None, ("name may only contain letters, digits, spaces, hyphens and underscores (max 64 chars)", 400)
+
+    embedding, error = validate_single_face_and_embed(frame)
+    if error:
+        return None, error
+
+    with faces_lock:
+        user_faces = known_faces.setdefault(user_id, {})
+        overwrite = member_id in user_faces
+        user_faces[member_id] = {
+            "embedding": embedding,
+            "name": name,
+            "member_id": member_id,
+        }
+        total_known = len(user_faces)
+
+    save_embeddings()
+    return {"overwrite": overwrite, "total_known": total_known}, None
+
+
+def recognize_face(frame, user_id):
+    user_id = normalize_id(user_id)
+    if not user_id:
+        return False, "", "", -1.0
+
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     image = Image.fromarray(rgb)
 
     face_tensor = mtcnn(image)
     if face_tensor is None:
         print("[FaceService] No face detected in recognition frame")
-        return False, ""
+        return False, "", "", -1.0
+
+    with torch.no_grad():
+        embedding = facenet(face_tensor.unsqueeze(0).to(device))[0]
+
+    with faces_lock:
+        faces_snapshot = dict(known_faces.get(user_id, {}))
+
+    if not faces_snapshot:
+        print(f"[FaceService] No enrolled faces for user_id={user_id}")
+        return False, "", "", -1.0
+
+    best_score = -1.0
+    best_name = ""
+    best_member_id = ""
+
+    for member_id, record in faces_snapshot.items():
+        score = cosine_similarity(embedding, record["embedding"])
+        display_name = record.get("name", str(member_id))
+        print(f"[FaceService] user={user_id} vs {display_name}: similarity={score:.4f}")
+        if score > best_score:
+            best_score = score
+            best_name = display_name
+            best_member_id = str(record.get("member_id", member_id))
+
+    print(
+        f"[FaceService] Best scoped match user={user_id}: {best_name} "
+        f"(similarity={best_score:.4f}, threshold={MATCH_THRESHOLD})"
+    )
+
+    if best_score >= MATCH_THRESHOLD:
+        return True, best_name, best_member_id, best_score
+    return False, "", "", best_score
+
+
+def recognize_face_candidates(frame, candidates):
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    image = Image.fromarray(rgb)
+
+    face_tensor = mtcnn(image)
+    if face_tensor is None:
+        print("[FaceService] No face detected in recognition frame")
+        return False, "", "", -1.0
 
     with torch.no_grad():
         embedding = facenet(face_tensor.unsqueeze(0).to(device))[0]
 
     best_score = -1.0
     best_name = ""
+    best_member_id = ""
 
-    with faces_lock:
-        faces_snapshot = dict(known_faces)
-
-    for name, known_emb in faces_snapshot.items():
+    for candidate in candidates or []:
+        raw_embedding = candidate.get("embedding") or []
+        if not raw_embedding:
+            continue
+        known_emb = embedding_from_list(raw_embedding)
         score = cosine_similarity(embedding, known_emb)
-        print(f"[FaceService]   vs {name}: similarity={score:.4f}")
+        display_name = str(candidate.get("name") or "")
+        member_id = str(candidate.get("member_id") or "")
+        print(f"[FaceService] candidate member={member_id} name={display_name}: similarity={score:.4f}")
         if score > best_score:
             best_score = score
-            best_name = name
+            best_name = display_name
+            best_member_id = member_id
 
     print(
-        f"[FaceService] Best match: {best_name} "
+        f"[FaceService] Best candidate match: {best_name} "
         f"(similarity={best_score:.4f}, threshold={MATCH_THRESHOLD})"
     )
 
     if best_score >= MATCH_THRESHOLD:
-        return True, best_name
-    return False, ""
+        return True, best_name, best_member_id, best_score
+    return False, "", "", best_score
 
 
-# ----------------------------
-# VIDEO SEQUENCE CAPTURE
-# ----------------------------
 def capture_video_sequence(duration=CAPTURE_DURATION, fps=CAPTURE_FPS):
-    """Capture multiple frames over a time window for liveness detection.
-    Uses a lock to prevent concurrent camera access from overlapping PIR triggers.
-    Returns a list of BGR frames."""
-
     if not camera_lock.acquire(timeout=5):
         print("[FaceService] Camera is busy (another capture in progress)")
         return []
@@ -182,7 +338,6 @@ def capture_video_sequence(duration=CAPTURE_DURATION, fps=CAPTURE_FPS):
             print("[FaceService] Failed to open camera")
             return []
 
-        # Warmup: discard first few frames (Windows cameras need this)
         for _ in range(3):
             cap.read()
 
@@ -213,13 +368,12 @@ def capture_video_sequence(duration=CAPTURE_DURATION, fps=CAPTURE_FPS):
         camera_lock.release()
 
 
-# ----------------------------
-# API ENDPOINTS
-# ----------------------------
 @app.route("/recognize", methods=["POST"])
 def recognize():
-    """Recognize a face from raw image bytes (no anti-spoof)."""
     image_bytes = request.data
+    user_id = normalize_id(request.args.get("user_id"))
+    if not user_id:
+        return jsonify({"error": "user_id is required"}), 400
     if not image_bytes:
         return jsonify({"error": "no image data received"}), 400
 
@@ -228,44 +382,31 @@ def recognize():
     if frame is None:
         return jsonify({"error": "could not decode image"}), 400
 
-    match, user = recognize_face(frame)
-    return jsonify({"match": match, "user": user})
+    match, user, member_id, score = recognize_face(frame, user_id)
+    return jsonify({"match": match, "user": user, "user_id": user_id, "member_id": member_id, "score": score})
 
 
 @app.route("/recognize-url", methods=["POST"])
 def recognize_url():
-    """Recognize a face from an image URL (e.g. Cloudinary).
-
-    Accepts JSON: {"url": "https://res.cloudinary.com/..."}
-    Downloads the image and runs face recognition (no anti-spoof).
-    """
     try:
         data = request.get_json(silent=True)
         if not data:
             return jsonify({"error": "request body must be JSON"}), 400
 
-        url = (data.get("url") or "").strip()
-        if not url:
-            return jsonify({"error": "url is required"}), 400
+        user_id = normalize_id(data.get("user_id"))
+        image_url = (data.get("image_url") or data.get("url") or "").strip()
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+        if not image_url:
+            return jsonify({"error": "image_url is required"}), 400
 
-        # Download image from URL
         try:
-            resp = http_requests.get(url, timeout=10)
-            resp.raise_for_status()
+            frame = load_image_from_url(image_url)
         except Exception as e:
             return jsonify({"error": f"failed to download image from URL: {str(e)}"}), 400
 
-        image_bytes = resp.content
-        if not image_bytes:
-            return jsonify({"error": "downloaded image is empty"}), 400
-
-        npimg = np.frombuffer(image_bytes, np.uint8)
-        frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-        if frame is None:
-            return jsonify({"error": "could not decode downloaded image"}), 400
-
-        match, user = recognize_face(frame)
-        return jsonify({"match": match, "user": user})
+        match, user, member_id, score = recognize_face(frame, user_id)
+        return jsonify({"match": match, "user": user, "user_id": user_id, "member_id": member_id, "score": score})
 
     except Exception as e:
         traceback.print_exc()
@@ -274,20 +415,15 @@ def recognize_url():
 
 @app.route("/capture-and-recognize", methods=["POST"])
 def capture_and_recognize():
-    """Full pipeline: capture video -> anti-spoof -> face recognition.
-    This is the primary endpoint called by the Go backend on PIR trigger."""
     try:
-        with faces_lock:
-            n_faces = len(known_faces)
-        if n_faces == 0:
-            return jsonify({"error": "no known faces loaded"}), 503
+        data = request.get_json(silent=True) or {}
+        user_id = normalize_id(data.get("user_id"))
+        candidates = data.get("candidates") or []
 
-        # Step 1: Capture video sequence
         frames = capture_video_sequence()
         if len(frames) < 5:
             return jsonify({"error": f"not enough frames captured ({len(frames)}), camera may be busy"}), 500
 
-        # Step 2: Anti-spoof liveness checks
         alive, spoof_results = anti_spoof.run(frames)
 
         if not alive:
@@ -298,22 +434,34 @@ def capture_and_recognize():
             return jsonify({
                 "match": False,
                 "user": "",
+                "user_id": user_id,
+                "member_id": "",
+                "score": -1.0,
                 "spoof": True,
                 "anti_spoof": spoof_results,
                 "frame": frame_b64,
             })
 
-        # Step 3: Face recognition on the middle frame (most stable)
         best_frame = frames[len(frames) // 2]
-        match, user = recognize_face(best_frame)
+        match = False
+        user = ""
+        member_id = ""
+        score = -1.0
+        if candidates:
+            match, user, member_id, score = recognize_face_candidates(best_frame, candidates)
+        elif user_id:
+            match, user, member_id, score = recognize_face(best_frame, user_id)
 
         _, buf = cv2.imencode(".jpg", best_frame)
         frame_b64 = base64.b64encode(buf.tobytes()).decode("ascii")
 
-        print(f"[FaceService] capture-and-recognize -> alive=True match={match} user={user!r}")
+        print(f"[FaceService] capture-and-recognize -> user_id={user_id!r} alive=True match={match} user={user!r}")
         return jsonify({
             "match": match,
             "user": user,
+            "user_id": user_id,
+            "member_id": member_id,
+            "score": score,
             "spoof": False,
             "anti_spoof": spoof_results,
             "frame": frame_b64,
@@ -326,33 +474,16 @@ def capture_and_recognize():
 
 @app.route("/enroll", methods=["POST"])
 def enroll():
-    """Enroll a new face.
-
-    Accepts JSON: {"name": "Alice", "image": "<base64-encoded JPEG/PNG>"}
-
-    Edge cases handled:
-    - Empty / invalid name
-    - Corrupt or non-image data
-    - No face detected in image
-    - Multiple faces detected (ambiguous)
-    - Name already enrolled (overwrite)
-    - Concurrent enrollment (serialized via faces_lock)
-    """
     try:
         data = request.get_json(silent=True)
         if not data:
             return jsonify({"error": "request body must be JSON"}), 400
 
+        user_id = normalize_id(data.get("user_id"))
+        member_id = normalize_id(data.get("member_id"))
         name = (data.get("name") or "").strip()
         image_b64 = data.get("image") or ""
 
-        # Validate name
-        if not name:
-            return jsonify({"error": "name is required"}), 400
-        if not _NAME_RE.match(name):
-            return jsonify({"error": "name may only contain letters, digits, spaces, hyphens and underscores (max 64 chars)"}), 400
-
-        # Decode image
         if not image_b64:
             return jsonify({"error": "image is required (base64-encoded)"}), 400
         try:
@@ -363,46 +494,104 @@ def enroll():
         npimg = np.frombuffer(image_bytes, np.uint8)
         frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
         if frame is None:
-            return jsonify({"error": "could not decode image — unsupported format or corrupt data"}), 400
+            return jsonify({"error": "could not decode image; unsupported format or corrupt data"}), 400
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(rgb)
+        result, error = enroll_frame(user_id, member_id, name, frame)
+        if error:
+            message, status = error
+            return jsonify({"error": message}), status
 
-        # Check for multiple faces (reject ambiguous enrollment)
-        all_faces = mtcnn_all(pil_image)
-        if all_faces is None:
-            return jsonify({"error": "no face detected in the provided image"}), 422
-        if isinstance(all_faces, list) or (hasattr(all_faces, 'shape') and all_faces.ndim == 4 and all_faces.shape[0] > 1):
-            n = all_faces.shape[0] if hasattr(all_faces, 'shape') else len(all_faces)
-            if n > 1:
-                return jsonify({"error": f"multiple faces detected ({n}) — please provide an image with exactly one face"}), 422
-
-        # Get single face tensor
-        face_tensor = mtcnn(pil_image)
-        if face_tensor is None:
-            return jsonify({"error": "face detection failed — image may be too blurry or face too small"}), 422
-
-        # Compute embedding
-        with torch.no_grad():
-            embedding = facenet(face_tensor.unsqueeze(0).to(device))[0]
-
-        overwrite = name in known_faces
-
-        # Save image to disk
-        safe_filename = name.replace(" ", "_") + ".jpg"
-        image_path = os.path.join(KNOWN_FACES_DIR, safe_filename)
-        cv2.imwrite(image_path, frame)
-
-        # Update in-memory dict and persist
-        with faces_lock:
-            known_faces[name] = embedding
-        save_embeddings()
-
-        print(f"[FaceService] Enrolled: {name!r} (overwrite={overwrite})")
+        print(f"[FaceService] Enrolled: user={user_id!r} member={member_id!r} name={name!r}")
         return jsonify({
             "enrolled": name,
-            "overwrite": overwrite,
-            "total_known": len(known_faces),
+            "user_id": user_id,
+            "member_id": member_id,
+            "overwrite": result["overwrite"],
+            "total_known": result["total_known"],
+        }), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"internal error: {str(e)}"}), 500
+
+
+@app.route("/enroll-url", methods=["POST"])
+def enroll_url():
+    try:
+        data = request.get_json(silent=True)
+        if not data:
+            return jsonify({"error": "request body must be JSON"}), 400
+
+        user_id = normalize_id(data.get("user_id"))
+        member_id = normalize_id(data.get("member_id"))
+        name = (data.get("name") or "").strip()
+        image_url = (data.get("image_url") or data.get("url") or "").strip()
+
+        if not image_url:
+            return jsonify({"error": "image_url is required"}), 400
+
+        try:
+            frame = load_image_from_url(image_url)
+        except Exception as e:
+            return jsonify({"error": f"failed to download image from URL: {str(e)}"}), 400
+
+        result, error = enroll_frame(user_id, member_id, name, frame)
+        if error:
+            message, status = error
+            return jsonify({"error": message}), status
+
+        print(f"[FaceService] Enrolled from URL: user={user_id!r} member={member_id!r} name={name!r}")
+        return jsonify({
+            "enrolled": name,
+            "user_id": user_id,
+            "member_id": member_id,
+            "overwrite": result["overwrite"],
+            "total_known": result["total_known"],
+        }), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"internal error: {str(e)}"}), 500
+
+
+@app.route("/embed-url", methods=["POST"])
+def embed_url():
+    try:
+        data = request.get_json(silent=True)
+        if not data:
+            return jsonify({"error": "request body must be JSON"}), 400
+
+        user_id = normalize_id(data.get("user_id"))
+        member_id = normalize_id(data.get("member_id"))
+        name = (data.get("name") or "").strip()
+        image_url = (data.get("image_url") or data.get("url") or "").strip()
+
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+        if not member_id:
+            return jsonify({"error": "member_id is required"}), 400
+        if not name:
+            return jsonify({"error": "name is required"}), 400
+        if not _NAME_RE.match(name):
+            return jsonify({"error": "name may only contain letters, digits, spaces, hyphens and underscores (max 64 chars)"}), 400
+        if not image_url:
+            return jsonify({"error": "image_url is required"}), 400
+
+        try:
+            frame = load_image_from_url(image_url)
+        except Exception as e:
+            return jsonify({"error": f"failed to download image from URL: {str(e)}"}), 400
+
+        embedding, error = validate_single_face_and_embed(frame)
+        if error:
+            message, status = error
+            return jsonify({"error": message}), status
+
+        return jsonify({
+            "user_id": user_id,
+            "member_id": member_id,
+            "name": name,
+            "embedding": embedding_to_list(embedding),
         }), 200
 
     except Exception as e:
@@ -412,53 +601,61 @@ def enroll():
 
 @app.route("/faces", methods=["GET"])
 def list_faces():
-    """List all enrolled face names."""
+    user_id = normalize_id(request.args.get("user_id"))
     with faces_lock:
-        names = list(known_faces.keys())
-    return jsonify({"faces": names, "count": len(names)})
+        if user_id:
+            faces = known_faces.get(user_id, {})
+            items = [
+                {"member_id": record.get("member_id", member_id), "name": record.get("name", "")}
+                for member_id, record in faces.items()
+            ]
+            count = len(items)
+        else:
+            items = {
+                uid: [
+                    {"member_id": record.get("member_id", member_id), "name": record.get("name", "")}
+                    for member_id, record in faces.items()
+                ]
+                for uid, faces in known_faces.items()
+            }
+            count = sum(len(faces) for faces in items.values())
+
+    return jsonify({"faces": items, "count": count})
 
 
-@app.route("/faces/<name>", methods=["DELETE"])
-def delete_face(name):
-    """Remove an enrolled face by name."""
-    name = name.strip()
+@app.route("/faces/<user_id>/<member_id>", methods=["DELETE"])
+def delete_face(user_id, member_id):
+    user_id = normalize_id(user_id)
+    member_id = normalize_id(member_id)
     with faces_lock:
-        if name not in known_faces:
-            return jsonify({"error": f"face {name!r} not found"}), 404
-        del known_faces[name]
-
-    # Remove image from disk (best-effort)
-    for ext in (".jpg", ".jpeg", ".png"):
-        path = os.path.join(KNOWN_FACES_DIR, name.replace(" ", "_") + ext)
-        if os.path.exists(path):
-            try:
-                os.remove(path)
-            except Exception as e:
-                print(f"[FaceService] WARNING: could not delete image {path}: {e}")
+        user_faces = known_faces.get(user_id, {})
+        if member_id not in user_faces:
+            return jsonify({"error": f"face user_id={user_id!r} member_id={member_id!r} not found"}), 404
+        del user_faces[member_id]
+        if not user_faces:
+            known_faces.pop(user_id, None)
+        total_known = len(known_faces.get(user_id, {}))
 
     save_embeddings()
-    print(f"[FaceService] Deleted face: {name!r}")
-    return jsonify({"deleted": name, "total_known": len(known_faces)})
+    print(f"[FaceService] Deleted face: user={user_id!r} member={member_id!r}")
+    return jsonify({"deleted": member_id, "user_id": user_id, "total_known": total_known})
 
 
 @app.route("/health", methods=["GET"])
 def health():
     with faces_lock:
-        n = len(known_faces)
-        names = list(known_faces.keys())
+        n = sum(len(faces) for faces in known_faces.values())
+        users = {uid: len(faces) for uid, faces in known_faces.items()}
     return jsonify({
         "status": "ok",
         "model": "FaceNet (InceptionResnetV1 + VGGFace2)",
         "anti_spoof": "blink + head_movement + texture (2/3 required)",
         "device": str(device),
         "known_faces": n,
-        "known_users": names,
+        "known_users": users,
     })
 
 
-# ----------------------------
-# START SERVER
-# ----------------------------
 if __name__ == "__main__":
     load_known_faces()
     app.run(host="0.0.0.0", port=5000)

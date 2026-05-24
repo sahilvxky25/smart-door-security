@@ -37,8 +37,11 @@ class EventDetailScreen extends StatelessWidget {
                       errorWidget: (_, _, _) => Container(
                         height: 280,
                         color: AppColors.cardBg,
-                        child: const Icon(Icons.broken_image,
-                            color: AppColors.textMuted, size: 48),
+                        child: const Icon(
+                          Icons.broken_image,
+                          color: AppColors.textMuted,
+                          size: 48,
+                        ),
                       ),
                     ),
                   ),
@@ -49,18 +52,20 @@ class EventDetailScreen extends StatelessWidget {
                       _buildRow('Type', event.displayType),
                       _buildRow(
                         'Time',
-                        DateFormat.yMd()
-                            .add_jm()
-                            .format(event.timestamp.toLocal()),
+                        DateFormat.yMd().add_jm().format(
+                          event.timestamp.toLocal(),
+                        ),
                       ),
                       if (event.user != null) ...[
                         _buildRow('User', event.user!.name),
+                        _buildRow('Family Member', event.familyMember!),
                         _buildRow('Email', event.user!.email),
                       ],
                     ],
                   ),
                 ),
-                if (event.eventType == Event.typeUnknownVisitor || event.eventType == Event.typeSpoofAttempt)
+                if (event.eventType == Event.typeUnknownVisitor ||
+                    event.eventType == Event.typeSpoofAttempt)
                   Padding(
                     padding: const EdgeInsets.only(top: 20),
                     child: SizedBox(
@@ -89,15 +94,22 @@ class EventDetailScreen extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label,
-              style: const TextStyle(
-                  color: AppColors.textMuted, fontWeight: FontWeight.w500)),
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.textMuted,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
           Flexible(
-            child: Text(value,
-                textAlign: TextAlign.end,
-                style: const TextStyle(
-                    color: AppColors.textPrimary,
-                    fontWeight: FontWeight.w600)),
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ],
       ),

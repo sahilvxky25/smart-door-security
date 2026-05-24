@@ -62,7 +62,7 @@ Purpose: Tracks door open/closed state and participates in forced-entry detectio
 | Actions | If intrusion is inactive, no call is active, and ultrasonic confirms visitor-at-door: capture frame, run face recognition, then produce `AUTHORIZED_ENTRY`, `UNKNOWN_VISITOR`, or `SPOOF_ATTEMPT` |
 | Debounce (ESP32) | 3 s |
 
-Purpose: Starts the visitor authentication flow, but only after backend policy checks pass.
+Purpose: Starts the visitor authentication flow, but only after backend policy checks pass. The backend keeps this flow single-flight: while one PIR-triggered auth flow is waiting for or handling a face-auth response, additional PIR triggers are skipped instead of starting another scan. Face recognition is scoped to the resolved door owner, so a match from another user's family bucket cannot authorize this door.
 
 ---
 

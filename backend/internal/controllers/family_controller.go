@@ -20,17 +20,19 @@ import (
 const maxPhotoSize = 10 << 20 // 10 MB
 
 type FamilyController struct {
-	repo        *repository.FamilyRepo
-	faceService *services.FaceService
-	store       *storage.MediaStorage
+	repo          *repository.FamilyRepo
+	embeddingRepo *repository.FaceEmbeddingRepo
+	faceService   *services.FaceService
+	store         *storage.MediaStorage
 }
 
 func NewFamilyController(
 	repo *repository.FamilyRepo,
+	embeddingRepo *repository.FaceEmbeddingRepo,
 	faceService *services.FaceService,
 	store *storage.MediaStorage,
 ) *FamilyController {
-	return &FamilyController{repo: repo, faceService: faceService, store: store}
+	return &FamilyController{repo: repo, embeddingRepo: embeddingRepo, faceService: faceService, store: store}
 }
 
 // ListMembers godoc
@@ -141,7 +143,7 @@ func (fc *FamilyController) UpdateMember(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name must not be blank"})
 		return
 	}
-	
+
 	userID := c.MustGet("user_id").(uint)
 	m, err := fc.repo.Get(userID, id)
 	if err != nil || m == nil {
@@ -163,7 +165,10 @@ func (fc *FamilyController) UpdateMember(c *gin.Context) {
 	if m.FaceEnrolled && oldName != req.Name {
 		// We can't re-enroll without the original image; unenroll the old name so
 		// the user re-enrolls with the new name.
-		_ = fc.faceService.DeleteFace(fmt.Sprintf("%d_%s", userID, oldName))
+		_ = fc.faceService.DeleteFace(userID, m.ID)
+		if fc.embeddingRepo != nil {
+			_ = fc.embeddingRepo.Delete(userID, m.ID)
+		}
 		m.FaceEnrolled = false
 	}
 
@@ -186,7 +191,7 @@ func (fc *FamilyController) DeleteMember(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-	
+
 	userID := c.MustGet("user_id").(uint)
 	m, err := fc.repo.Get(userID, id)
 	if err != nil || m == nil {
@@ -196,9 +201,12 @@ func (fc *FamilyController) DeleteMember(c *gin.Context) {
 
 	// Remove face enrollment (best-effort)
 	if m.FaceEnrolled {
-		if ferr := fc.faceService.DeleteFace(fmt.Sprintf("%d_%s", userID, m.Name)); ferr != nil {
+		if ferr := fc.faceService.DeleteFace(userID, m.ID); ferr != nil {
 			// Log but don't fail the delete
 			_ = ferr
+		}
+		if fc.embeddingRepo != nil {
+			_ = fc.embeddingRepo.Delete(userID, m.ID)
 		}
 	}
 
@@ -223,7 +231,7 @@ func (fc *FamilyController) EnrollFace(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-	
+
 	userID := c.MustGet("user_id").(uint)
 	m, err := fc.repo.Get(userID, id)
 	if err != nil || m == nil {
@@ -271,13 +279,25 @@ func (fc *FamilyController) EnrollFace(c *gin.Context) {
 		return
 	}
 
-	// Enroll face in the recognition model
-	faceName := fmt.Sprintf("%d_%s", userID, m.Name)
-	if err := fc.faceService.EnrollFace(faceName, imageBytes); err != nil {
+	embedding, err := fc.faceService.ExtractEmbeddingFromURL(userID, m.ID, m.Name, photoURL)
+	if err != nil {
 		// Enrollment failed — clean up the uploaded photo so storage stays consistent
 		_ = fc.store.DeleteObject(context.Background(), objectName)
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
+	}
+	if fc.embeddingRepo != nil {
+		if err := fc.embeddingRepo.Upsert(userID, m.ID, m.Name, photoURL, embedding); err != nil {
+			_ = fc.store.DeleteObject(context.Background(), objectName)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "face embedding generated but failed to update database"})
+			return
+		}
+	}
+
+	// Keep Python's scoped cache warm for compatibility with direct face-service
+	// endpoints. The database remains the source of truth for backend auth.
+	if err := fc.faceService.EnrollFaceFromURL(userID, m.ID, m.Name, photoURL); err != nil {
+		_ = err
 	}
 
 	// Remove old photo from Cloudinary if there was one
@@ -310,7 +330,7 @@ func (fc *FamilyController) UnenrollFace(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-	
+
 	userID := c.MustGet("user_id").(uint)
 	m, err := fc.repo.Get(userID, id)
 	if err != nil || m == nil {
@@ -323,9 +343,15 @@ func (fc *FamilyController) UnenrollFace(c *gin.Context) {
 		return
 	}
 
-	if err := fc.faceService.DeleteFace(fmt.Sprintf("%d_%s", userID, m.Name)); err != nil {
+	if err := fc.faceService.DeleteFace(userID, m.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove face from model"})
 		return
+	}
+	if fc.embeddingRepo != nil {
+		if err := fc.embeddingRepo.Delete(userID, m.ID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove face embedding from database"})
+			return
+		}
 	}
 
 	m.FaceEnrolled = false

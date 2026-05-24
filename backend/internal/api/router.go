@@ -71,7 +71,8 @@ func NewRouter(
 
 	// Family member management + face enrollment
 	familyRepo := repository.NewFamilyRepo(db)
-	fc := controllers.NewFamilyController(familyRepo, face, mediaStore)
+	faceEmbeddingRepo := repository.NewFaceEmbeddingRepo(db)
+	fc := controllers.NewFamilyController(familyRepo, faceEmbeddingRepo, face, mediaStore)
 	authGroup.GET("/family", fc.ListMembers)
 	authGroup.POST("/family", fc.CreateMember)
 	authGroup.GET("/family/:id", fc.GetMember)
@@ -131,9 +132,9 @@ func uploadProfilePhotoHandler(db *gorm.DB, store *storage.MediaStorage, faceSer
 			return
 		}
 
-		// Enroll face in the recognition model as user_id_name
-		faceName := fmt.Sprintf("%d_%s", user.ID, user.Name)
-		if err := faceService.EnrollFace(faceName, data); err != nil {
+		// Enroll the profile face under the user's own scoped bucket. Family
+		// members use their family_member ID; profile photos use the user ID.
+		if err := faceService.EnrollFace(user.ID, user.ID, user.Name, data); err != nil {
 			// Enrollment failed — clean up the uploaded photo
 			_ = store.DeleteObject(c.Request.Context(), objectName)
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})

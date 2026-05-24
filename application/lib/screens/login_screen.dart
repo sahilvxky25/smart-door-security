@@ -36,10 +36,13 @@ class _Validators {
   static String? password(String? v) {
     if (v == null || v.isEmpty) return 'Password is required';
     if (v.length < 8) return 'Minimum 8 characters';
-    if (!RegExp(r'[A-Z]').hasMatch(v)) return 'Include at least one uppercase letter';
-    if (!RegExp(r'[a-z]').hasMatch(v)) return 'Include at least one lowercase letter';
+    if (!RegExp(r'[A-Z]').hasMatch(v))
+      return 'Include at least one uppercase letter';
+    if (!RegExp(r'[a-z]').hasMatch(v))
+      return 'Include at least one lowercase letter';
     if (!RegExp(r'[0-9]').hasMatch(v)) return 'Include at least one digit';
-    if (!RegExp(r'[^a-zA-Z0-9]').hasMatch(v)) return 'Include at least one special character';
+    if (!RegExp(r'[^a-zA-Z0-9]').hasMatch(v))
+      return 'Include at least one special character';
     return null;
   }
 }
@@ -92,20 +95,18 @@ class LoginScreen extends StatelessWidget {
                 const SizedBox(height: 6),
                 const Text(
                   'Secure access for your home',
-                  style: TextStyle(
-                    color: AppColors.textMuted,
-                    fontSize: 14,
-                  ),
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 14),
                 ),
                 const SizedBox(height: 36),
                 const TabBar(
-                  tabs: [Tab(text: 'Sign In'), Tab(text: 'Sign Up')],
+                  tabs: [
+                    Tab(text: 'Sign In'),
+                    Tab(text: 'Sign Up'),
+                  ],
                   labelStyle: TextStyle(fontWeight: FontWeight.w600),
                 ),
                 Expanded(
-                  child: TabBarView(
-                    children: [_SignInForm(), _SignUpForm()],
-                  ),
+                  child: TabBarView(children: [_SignInForm(), _SignUpForm()]),
                 ),
               ],
             ),
@@ -149,9 +150,12 @@ class _SignInFormState extends State<_SignInForm> {
       final config = context.read<AppConfig>();
       signaling.connect(config.wsUrl, userId: auth.user?.id);
       signaling.initializeFCM(api);
+      if (!mounted) return;
+      Navigator.of(context).pushNamedAndRemoveUntil('/home', (_) => false);
     } else if (auth.error != null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(auth.error!)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(auth.error!)));
     }
   }
 
@@ -182,7 +186,8 @@ class _SignInFormState extends State<_SignInForm> {
                 prefixIcon: const Icon(Icons.lock_outline),
                 suffixIcon: IconButton(
                   icon: Icon(
-                      _obscure ? Icons.visibility_off : Icons.visibility),
+                    _obscure ? Icons.visibility_off : Icons.visibility,
+                  ),
                   onPressed: () => setState(() => _obscure = !_obscure),
                 ),
               ),
@@ -203,7 +208,9 @@ class _SignInFormState extends State<_SignInForm> {
                         height: 20,
                         width: 20,
                         child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.black),
+                          strokeWidth: 2,
+                          color: Colors.black,
+                        ),
                       )
                     : const Text('Sign In'),
               ),
@@ -242,7 +249,11 @@ class _SignUpFormState extends State<_SignUpForm> {
     final auth = context.read<AuthProvider>();
     final api = context.read<ApiService>();
     final ok = await auth.signUp(
-        api, _nameCtrl.text.trim(), _emailCtrl.text.trim(), _passCtrl.text);
+      api,
+      _nameCtrl.text.trim(),
+      _emailCtrl.text.trim(),
+      _passCtrl.text,
+    );
     if (!mounted) return;
     setState(() => _submitting = false);
     if (ok) {
@@ -251,9 +262,17 @@ class _SignUpFormState extends State<_SignUpForm> {
       final config = context.read<AppConfig>();
       signaling.connect(config.wsUrl, userId: auth.user?.id);
       signaling.initializeFCM(api);
+      if (!mounted) return;
+      DefaultTabController.of(context).animateTo(0);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Registration successful. Please sign in.'),
+        ),
+      );
     } else if (auth.error != null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(auth.error!)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(auth.error!)));
     }
   }
 
@@ -297,7 +316,8 @@ class _SignUpFormState extends State<_SignUpForm> {
                 prefixIcon: const Icon(Icons.lock_outline),
                 suffixIcon: IconButton(
                   icon: Icon(
-                      _obscure ? Icons.visibility_off : Icons.visibility),
+                    _obscure ? Icons.visibility_off : Icons.visibility,
+                  ),
                   onPressed: () => setState(() => _obscure = !_obscure),
                 ),
               ),
@@ -317,7 +337,9 @@ class _SignUpFormState extends State<_SignUpForm> {
                         height: 20,
                         width: 20,
                         child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.black),
+                          strokeWidth: 2,
+                          color: Colors.black,
+                        ),
                       )
                     : const Text('Sign Up'),
               ),

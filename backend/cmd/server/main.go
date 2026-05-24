@@ -15,6 +15,7 @@ import (
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/flows"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/models"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/mqtt"
+	"github.com/gottatouchsomegrass/smart-door-backend/internal/repository"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/services"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/storage"
 	"github.com/gottatouchsomegrass/smart-door-backend/internal/webrtc"
@@ -40,7 +41,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Database connection failed:", err)
 	}
-	db.AutoMigrate(&models.User{}, &models.Event{}, &models.FamilyMember{})
+	db.AutoMigrate(&models.User{}, &models.Event{}, &models.FamilyMember{}, &models.FaceEmbedding{})
 
 	// Initialize MQTT client
 	mqttClient := mqtt.NewClient(cfg.MQTT_BROKER)
@@ -82,7 +83,15 @@ func main() {
 	proximityService := services.NewProximityService(db, mqttClient, eventService, notificationService)
 	ultrasonicService := services.NewUltrasonicService(db, mqttClient, eventService, notificationService)
 	motorService := services.NewMotorService(doorService, eventService, soundService, notificationService)
-	visitorAuthFlow := flows.NewVisitorAuthFlow(faceService, doorService, securityState, eventService, mediaStore, mqttClient, notificationService, soundService, ultrasonicService, doorPeer.IsCallActive)
+	faceEmbeddingRepo := repository.NewFaceEmbeddingRepo(db)
+	resolveDoorOwnerID := func() *uint {
+		if cfg.DOOR_OWNER_USER_ID != 0 {
+			id := cfg.DOOR_OWNER_USER_ID
+			return &id
+		}
+		return signalingHub.GetActiveOwnerID()
+	}
+	visitorAuthFlow := flows.NewVisitorAuthFlow(faceService, doorService, securityState, eventService, mediaStore, mqttClient, notificationService, soundService, ultrasonicService, doorPeer.IsCallActive, resolveDoorOwnerID, faceEmbeddingRepo)
 	intrusionFlow := flows.NewIntrusionFlow(doorService, securityState, eventService, faceService, mediaStore, soundService, notificationService)
 	callManager.SetOnDeclinedCall(func(callID string, callType string) {
 		if callType != models.EventForcedEntry {
