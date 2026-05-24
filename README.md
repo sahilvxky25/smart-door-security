@@ -4,7 +4,7 @@ An end-to-end IoT smart door platform that combines **ESP32 hardware**, a **Go/P
 
 ## 🎬 Project Showcase
 
-<a href="https://youtu.be/wrQUuxkTJ_Y"><img src="https://img.youtube.com/vi/wrQUuxkTJ_Y/maxresdefault.jpg"></a>
+<a href="https://youtu.be/wrQUuxkTJ_Y"><img src="https://img.youtube.com/vi/wrQUuxkTJ_Y/maxresdefault.jpg" alt="Smart Door Security System Demo Video"></a>
 
 ## ✨ Core Features
 
