@@ -4,7 +4,7 @@ An end-to-end IoT smart door platform that combines **ESP32 hardware**, a **Go/P
 
 ## 🎬 Project Showcase
 
-- YouTube demo: https://youtu.be/wrQUuxkTJ_Y?si=2nyx6mTAIUpN1NQH
+<a href="https://youtu.be/wrQUuxkTJ_Y"><img src="https://img.youtube.com/vi/wrQUuxkTJ_Y/maxresdefault.jpg"></a>
 
 ## ✨ Core Features
 
